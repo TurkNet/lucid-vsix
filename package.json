@@ -3,7 +3,7 @@
   "publisher": "mASUm0813",
   "displayName": "Lucid (Ollama Integration)",
   "description": "Integrate local Ollama models into VS Code like as Copilot Chat",
-  "version": "0.0.2",
+  "version": "0.1.0",
   "license": "MIT",
   "icon": "resources/lucid-icon.png",
   "keywords": [
@@ -12,7 +12,8 @@
     "chat",
     "copilot",
     "llm",
-    "local"
+    "local",
+    "codex"
   ],
   "galleryBanner": {
     "color": "#1e1e1e",
@@ -33,7 +34,8 @@
   "activationEvents": [
     "onView:lucid.chatView",
     "onCommand:lucid.sendFile",
-    "onCommand:lucid.sendActiveFile",
+      "onCommand:lucid.sendActiveFile",
+      "onCommand:lucid.sendActiveForEdit",
     "onCommand:lucid.sendFiles",
     "onCommand:lucid.openChatView",
     "onCommand:lucid.closeChatView",
@@ -61,6 +63,10 @@
       {
         "command": "lucid.sendActiveFile",
         "title": "Lucid: Send Active File to Ollama"
+      },
+      {
+        "command": "lucid.sendActiveForEdit",
+        "title": "Lucid: Send Active Editor (selection or file) to Ollama and apply response"
       },
       {
         "command": "lucid.sendFiles",

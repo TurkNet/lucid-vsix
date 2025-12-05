@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import * as path from 'path';
 import { CurlLogger } from './curlLogger';
 import { LucidConfig } from './config';
 import { LucidLogger } from './logger';
@@ -378,23 +379,105 @@ export function activate(context: vscode.ExtensionContext) {
 
         webviewView.webview.onDidReceiveMessage(async (msg) => {
           LucidLogger.debug('Webview message received', msg);
+          // maintain a per-view set of attached files in closure
+          if (!(webviewView as any)._attachedPaths) (webviewView as any)._attachedPaths = new Set<string>();
+          const attachedPaths: Set<string> = (webviewView as any)._attachedPaths;
+
+          async function listWorkspaceFiles() {
+            try {
+              const folders = vscode.workspace.workspaceFolders || [];
+              if (folders.length === 0) return [];
+              // Prefer files under the first workspace folder (common simple case)
+              const first = folders[0];
+              try {
+                const rel = new vscode.RelativePattern(first, '**/*');
+                const files = await vscode.workspace.findFiles(rel, '**/node_modules/**', 1000);
+                return files.map(f => ({ path: f.fsPath, name: path.basename(f.fsPath) }));
+              } catch (e) {
+                // fallback to workspace-wide search
+                const files = await vscode.workspace.findFiles('**/*', '**/node_modules/**', 1000);
+                return files.map(f => ({ path: f.fsPath, name: path.basename(f.fsPath) }));
+              }
+            } catch (e) {
+              LucidLogger.error('listWorkspaceFiles error', e);
+              return [];
+            }
+          }
+
           try {
-            if (msg?.type === 'send') {
+            if (!msg || !msg.type) return;
+
+            if (msg.type === 'requestFiles') {
+              const files = await listWorkspaceFiles();
+              webviewView.webview.postMessage({ type: 'fileList', files });
+              webviewView.webview.postMessage({ type: 'attachedChanged', files: Array.from(attachedPaths) });
+              return;
+            }
+
+            if (msg.type === 'attach') {
+              const p = String(msg.path || '');
+              if (p) attachedPaths.add(p);
+              webviewView.webview.postMessage({ type: 'attachedChanged', files: Array.from(attachedPaths) });
+              return;
+            }
+
+            if (msg.type === 'detach') {
+              const p = String(msg.path || '');
+              if (p) attachedPaths.delete(p);
+              webviewView.webview.postMessage({ type: 'attachedChanged', files: Array.from(attachedPaths) });
+              return;
+            }
+
+            if (msg.type === 'send') {
               const prompt: string = String(msg.prompt || '');
               if (!prompt) return;
               const streamingStatusEnabled = LucidConfig.shouldShowStreamingStatus();
               webviewView.webview.postMessage({ type: 'status', text: 'Sending prompt…', streaming: streamingStatusEnabled });
+
+              let combined = '';
+              if (attachedPaths.size > 0) {
+                for (const p of Array.from(attachedPaths)) {
+                  try {
+                    const uri = vscode.Uri.file(p);
+                    const bytes = await vscode.workspace.fs.readFile(uri);
+                    const text = Buffer.from(bytes).toString('utf8');
+                    combined += `--- ATTACHED: ${p.split('/').pop()} ---\n${text}\n--- END ATTACHED ---\n\n`;
+                  } catch (e) {
+                    LucidLogger.error('Failed to read attached file ' + p, e);
+                  }
+                }
+              } else {
+                // No attached files: fall back to the active editor's contents (if any)
+                try {
+                  const ed = vscode.window.activeTextEditor;
+                  if (ed && ed.document) {
+                    const doc = ed.document;
+                    const fileName = doc.fileName && doc.fileName.length ? path.basename(doc.fileName) : (doc.uri && doc.uri.path ? path.basename(doc.uri.path) : undefined);
+                    const text = doc.getText();
+                    combined += `--- ACTIVE EDITOR: ${fileName || 'untitled'} ---\n${text}\n--- END ACTIVE EDITOR ---\n\n`;
+                  }
+                } catch (e) {
+                  LucidLogger.debug('Failed to read active editor for fallback attached content', e);
+                }
+              }
+
+              const finalPrompt = combined + '\n' + prompt;
+
               try {
-                await sendPromptToOllama(webviewView.webview, prompt);
+                await sendPromptToOllama(webviewView.webview, finalPrompt);
               } catch (e) {
                 const text = e instanceof Error ? e.message : String(e);
                 LucidLogger.error('sendPromptToOllama error', e);
                 webviewView.webview.postMessage({ type: 'error', text });
                 webviewView.webview.postMessage({ type: 'status', text: 'Ollama request failed', level: 'error', streaming: false });
               }
-            } else if (msg?.type === 'error') {
+              return;
+            }
+
+            if (msg.type === 'error') {
               const text = typeof msg.text === 'string' ? msg.text : 'Unknown webview error';
               LucidLogger.error('Webview reported error:', text);
+              return;
             }
           } catch (msgErr) {
             LucidLogger.error('Error handling webview message', msgErr);
@@ -623,12 +706,25 @@ export function activate(context: vscode.ExtensionContext) {
       fill: currentColor;
       flex-shrink: 0;
     }
+    /* File search dropdown / list styles to match VS Code look */
+    #fileList { box-shadow: var(--vscode-widget-shadow, 0 1px 0 rgba(0,0,0,0.1)); border-radius: 6px; }
+    .file-list-item { padding: 6px 8px; border-radius: 4px; cursor: pointer; display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--vscode-foreground); }
+    .file-list-item:hover { background: var(--vscode-list-hoverBackground); color: var(--vscode-list-hoverForeground); }
+    .file-list-item.focused { background: var(--vscode-list-activeSelectionBackground); color: var(--vscode-list-activeSelectionForeground); outline: none; }
+    #fileList::-webkit-scrollbar { height: 8px; width: 8px; }
+    #fileList::-webkit-scrollbar-thumb { background: rgba(128,128,128,0.25); border-radius: 4px; }
+    #fileHint { font-size: 11px; color: var(--vscode-descriptionForeground); margin-bottom:6px; display: none; }
   </style>
 </head>
 <body>
   <div class="shell">
     <div id="messages" class="messages" aria-live="polite"></div>
     <div class="composer">
+      <div id="activeEditorName" style="font-size:12px; font-weight:600; margin-bottom:6px; color:var(--vscode-descriptionForeground);"></div>
+      <div id="activeFiles" style="display:flex; gap:6px; flex-wrap:wrap; margin-bottom:6px;"></div>
+      <input id="fileSearch" placeholder="Filter files..." style="width:100%; padding:6px; margin-bottom:6px; border-radius:4px; border:1px solid var(--vscode-input-border); background:var(--vscode-input-background); color:var(--vscode-input-foreground);" />
+      <div id="fileHint">↑/↓ select — Enter attach</div>
+      <div id="fileList" style="display:none; max-height:170px; overflow:auto; margin-bottom:8px; border:1px solid rgba(255,255,255,0.03); padding:6px; border-radius:6px; background:var(--vscode-sideBar-background)"></div>
       <textarea id="prompt" placeholder="Ask your local model..."></textarea>
       <div class="controls">
         <div class="status" id="status" data-level="info">
@@ -654,10 +750,294 @@ export function activate(context: vscode.ExtensionContext) {
       var statusRoot = document.getElementById('status');
       var statusText = document.getElementById('statusText');
       var spinner = document.getElementById('spinner');
+      var fileLabel = document.getElementById('fileLabel');
+      var activeEditorName = document.getElementById('activeEditorName');
+      var activeFilesRoot = document.getElementById('activeFiles');
+      var fileSearch = document.getElementById('fileSearch');
+      var fileListRoot = document.getElementById('fileList');
+      var fileHint = document.getElementById('fileHint');
 
-      if (!messages || !promptInput || !sendBtn || !statusRoot || !statusText || !spinner) {
-        console.error('Lucid Chat: missing required DOM nodes');
+
+      if (!messages || !promptInput || !sendBtn || !statusRoot || !statusText || !spinner || !activeEditorName || !activeFilesRoot || !fileSearch || !fileListRoot || !fileHint) {
+        var missing = [];
+        if (!messages) missing.push('messages');
+        if (!promptInput) missing.push('prompt');
+        if (!sendBtn) missing.push('send');
+        if (!statusRoot) missing.push('status');
+        if (!statusText) missing.push('statusText');
+        if (!spinner) missing.push('spinner');
+        if (!fileLabel) missing.push('fileLabel (optional)');
+        if (!activeEditorName) missing.push('activeEditorName');
+        if (!activeFilesRoot) missing.push('activeFiles');
+        if (!fileSearch) missing.push('fileSearch');
+        if (!fileListRoot) missing.push('fileList');
+        if (!fileHint) missing.push('fileHint');
+
+        // Console with structure for devtools
+        console.error('Lucid Chat: missing required DOM nodes:', missing.join(', '), {
+          messagesPresent: !!messages,
+          promptPresent: !!promptInput,
+          sendPresent: !!sendBtn,
+          statusPresent: !!statusRoot,
+          statusTextPresent: !!statusText,
+          spinnerPresent: !!spinner,
+          fileLabelPresent: !!fileLabel,
+          fileHintPresent: !!fileHint,
+          fileListPresent: !!fileListRoot
+        });
+
+        // Notify extension host for centralized logging / telemetry
+        try {
+          vscode.postMessage({ type: 'error', text: 'Webview initialization failed: missing DOM nodes', nodes: missing });
+        } catch (e) { /* ignore post failures */ }
+
+        // Try to show a visible error in the messages pane if available
+        try {
+          if (messages) {
+            var errBlock = document.createElement('div');
+            errBlock.className = 'message error';
+            var lbl = document.createElement('div');
+            lbl.className = 'message-label';
+            lbl.textContent = 'Error';
+            errBlock.appendChild(lbl);
+            var body = document.createElement('div');
+            body.className = 'message-body';
+            body.textContent = 'Webview failed to initialize. Missing nodes: ' + missing.join(', ');
+            errBlock.appendChild(body);
+            messages.appendChild(errBlock);
+          }
+        } catch (e) { /* ignore UI errors */ }
+
         return;
+      }
+
+      function setEditorLabel(text) {
+        try {
+          if (fileLabel) fileLabel.textContent = text || '';
+          if (activeEditorName) activeEditorName.textContent = text || '';
+        } catch (e) { /* ignore */ }
+      }
+
+      // File list render + interaction
+      var currentFiles = [];
+      var currentAttached = [];
+      var dropdownRows = [];
+      var dropdownSelected = -1;
+      function renderFileList(files, attached) {
+        try {
+          if (!Array.isArray(files)) files = [];
+          const attachedSet = new Set(attached || []);
+          fileListRoot.innerHTML = '';
+          // If we have no files but some attached entries, show attached ones
+          if ((!files || files.length === 0) && (!attached || attached.length === 0)) {
+            fileListRoot.textContent = 'No workspace files found';
+            return;
+          }
+          // normalize filter
+          var filter = '';
+          try { filter = (fileSearch && fileSearch.value) ? String(fileSearch.value).toLowerCase().trim() : ''; } catch (e) { filter = ''; }
+
+          // If no filter, hide the results dropdown (do not show full list)
+          if (!filter) {
+            try { fileListRoot.innerHTML = ''; fileListRoot.style.display = 'none'; if (fileHint) fileHint.style.display = 'none'; } catch (e) { }
+            return;
+          }
+
+          // show the results container and keyboard hint
+          try { fileListRoot.style.display = 'block'; if (fileHint) fileHint.style.display = 'block'; } catch (e) { }
+
+          var visibleIndex = 0;
+          dropdownRows = [];
+
+          for (const f of files) {
+            var nm = (f.name || f.path || '').toLowerCase();
+            if (nm.indexOf(filter) === -1) continue;
+            const row = document.createElement('div');
+            row.style.display = 'flex';
+            row.style.alignItems = 'center';
+            row.style.justifyContent = 'space-between';
+            row.style.padding = '2px 4px';
+
+            const left = document.createElement('div');
+            left.style.display = 'flex';
+            left.style.alignItems = 'center';
+
+            const name = document.createElement('div');
+            name.textContent = f.name || f.path;
+            name.title = f.path;
+            name.style.marginRight = '8px';
+
+            const badge = document.createElement('div');
+            badge.style.width = '18px';
+            badge.style.height = '18px';
+            badge.style.display = 'inline-flex';
+            badge.style.alignItems = 'center';
+            badge.style.justifyContent = 'center';
+            badge.style.cursor = 'pointer';
+
+            const isAttached = attachedSet.has(f.path);
+            if (isAttached) {
+              badge.textContent = '✔';
+              badge.title = 'Attached';
+              badge.style.opacity = '0.9';
+              badge.onclick = null;
+            } else {
+              badge.textContent = '+';
+              badge.title = 'Add to selection';
+              badge.onclick = () => { vscode.postMessage({ type: 'attach', path: f.path }); };
+            }
+
+            // Place the badge inline after the filename
+            left.appendChild(name);
+            left.appendChild(badge);
+            row.appendChild(left);
+
+            // accessibility / keyboard target
+            row.className = 'file-list-item';
+            row.tabIndex = 0;
+            row.dataset.index = String(visibleIndex);
+            row.dataset.path = f.path;
+            // mouse enter selects
+            row.addEventListener('mouseenter', function () { setDropdownSelected(Number(row.dataset.index)); });
+            // click to attach (if not attached)
+            row.addEventListener('click', function () {
+              try {
+                if (!attachedSet.has(f.path)) {
+                  vscode.postMessage({ type: 'attach', path: f.path });
+                  // hide dropdown and clear search for clarity
+                  try { if (fileListRoot) fileListRoot.style.display = 'none'; } catch (_) { }
+                }
+              } catch (e) { }
+            });
+
+            dropdownRows.push(row);
+            visibleIndex++;
+
+            fileListRoot.appendChild(row);
+          }
+          // ensure only up to N visible without scrolling (CSS handles scroll). nothing else to do here.
+          if (dropdownSelected >= dropdownRows.length) dropdownSelected = dropdownRows.length - 1;
+          updateDropdownFocus();
+        } catch (e) { /* ignore rendering errors */ }
+      }
+
+      function setDropdownSelected(idx) {
+        try {
+          dropdownSelected = typeof idx === 'number' ? idx : -1;
+          updateDropdownFocus();
+        } catch (e) { }
+      }
+
+      function updateDropdownFocus() {
+        try {
+          for (var i = 0; i < dropdownRows.length; i++) {
+            var r = dropdownRows[i];
+            if (!r) continue;
+            if (i === dropdownSelected) {
+              r.classList.add('focused');
+              try { r.scrollIntoView({ block: 'nearest' }); } catch (e) { }
+            } else {
+              r.classList.remove('focused');
+            }
+          }
+        } catch (e) { }
+      }
+
+      function renderAttachedPills(attached) {
+        try {
+          if (!activeFilesRoot) return;
+          activeFilesRoot.innerHTML = '';
+          if (!Array.isArray(attached) || attached.length === 0) return;
+          for (const p of attached) {
+            var base = p.split('/').pop();
+            var pill = document.createElement('div');
+            pill.style.display = 'inline-flex';
+            pill.style.alignItems = 'center';
+            pill.style.gap = '6px';
+            pill.style.padding = '4px 8px';
+            pill.style.borderRadius = '999px';
+            pill.style.border = '1px solid var(--vscode-input-border)';
+            pill.style.color = 'var(--vscode-input-foreground)';
+            pill.style.fontSize = '12px';
+
+            var txt = document.createElement('span');
+            txt.textContent = base || p;
+            txt.title = p;
+            pill.appendChild(txt);
+
+            var rem = document.createElement('button');
+            rem.textContent = '×';
+            rem.title = 'Remove attached file';
+            rem.style.border = 'none';
+            rem.style.background = 'transparent';
+            rem.style.cursor = 'pointer';
+            rem.style.fontSize = '12px';
+            rem.onclick = function () { vscode.postMessage({ type: 'detach', path: p }); };
+            pill.appendChild(rem);
+
+            activeFilesRoot.appendChild(pill);
+          }
+        } catch (e) { /* ignore */ }
+      }
+
+      // request initial file list
+      vscode.postMessage({ type: 'requestFiles' });
+      if (fileSearch) {
+        fileSearch.addEventListener('input', function () {
+          try { renderFileList(currentFiles, currentAttached); } catch (e) { }
+        });
+        // show results on focus as well if the field has content
+        fileSearch.addEventListener('focus', function () {
+          try { renderFileList(currentFiles, currentAttached); } catch (e) { }
+        });
+        // hide results if clicking outside (simple handler)
+        document.addEventListener('click', function (ev) {
+          try {
+            var target = ev.target;
+            if (!target) return;
+            if (target === fileSearch) return;
+            // if click inside the fileListRoot, ignore
+            if (fileListRoot && fileListRoot.contains && fileListRoot.contains(target)) return;
+            // otherwise hide dropdown
+            if (fileListRoot) fileListRoot.style.display = 'none';
+            if (fileHint) fileHint.style.display = 'none';
+          } catch (e) { }
+        });
+      }
+      // keyboard navigation for the dropdown
+      if (fileSearch) {
+        fileSearch.addEventListener('keydown', function (ev) {
+          try {
+            if (!dropdownRows || dropdownRows.length === 0) return;
+            if (ev.key === 'ArrowDown') {
+              ev.preventDefault();
+              dropdownSelected = Math.min((dropdownSelected + 1) || 0, dropdownRows.length - 1);
+              updateDropdownFocus();
+              return;
+            }
+            if (ev.key === 'ArrowUp') {
+              ev.preventDefault();
+              dropdownSelected = Math.max((dropdownSelected - 1) || 0, 0);
+              updateDropdownFocus();
+              return;
+            }
+            if (ev.key === 'Enter') {
+              ev.preventDefault();
+              if (dropdownSelected >= 0 && dropdownSelected < dropdownRows.length) {
+                var r = dropdownRows[dropdownSelected];
+                if (r && r.dataset && r.dataset.path) {
+                  vscode.postMessage({ type: 'attach', path: r.dataset.path });
+                  try { if (fileListRoot) fileListRoot.style.display = 'none'; } catch (_) { }
+                }
+              }
+              return;
+            }
+            if (ev.key === 'Escape') {
+              try { if (fileListRoot) fileListRoot.style.display = 'none'; } catch (_) { }
+              return;
+            }
+          } catch (e) { }
+        });
       }
 
       var state = {
@@ -888,6 +1268,15 @@ export function activate(context: vscode.ExtensionContext) {
           case 'append':
             appendBlock(msg.text, msg.role || 'assistant');
             break;
+          case 'fileList':
+            try { currentFiles = msg.files || []; renderFileList(currentFiles, currentAttached); renderAttachedPills(currentAttached); } catch (e) { /* ignore */ }
+            break;
+          case 'attachedChanged':
+            try { currentAttached = msg.files || []; renderFileList(currentFiles, currentAttached); renderAttachedPills(currentAttached); } catch (e) { /* ignore */ }
+            break;
+          case 'editor':
+            setEditorLabel(msg.text || '');
+            break;
           case 'clear':
             clearMessages();
             break;
@@ -1009,6 +1398,27 @@ export function activate(context: vscode.ExtensionContext) {
     sidebarProvider = new LucidSidebarProvider(context.extensionUri);
     context.subscriptions.push(vscode.window.registerWebviewViewProvider('lucid.chatView', sidebarProvider));
     LucidLogger.debug('Registered WebviewViewProvider for lucid.chatView');
+    // Post current active editor filename to the webview when available and on changes
+    const postEditorName = (editor?: vscode.TextEditor) => {
+      try {
+        const ed = editor || vscode.window.activeTextEditor;
+        if (!ed) return;
+        const view = (sidebarProvider as any)?._view;
+        if (!view) return;
+        const doc = ed.document;
+        const fileName = doc.fileName && doc.fileName.length ? path.basename(doc.fileName) : (doc.uri && doc.uri.path ? path.basename(doc.uri.path) : doc.uri.toString());
+        view.webview.postMessage({ type: 'editor', text: fileName });
+      } catch (e) {
+        LucidLogger.debug('postEditorName error', e);
+      }
+    };
+
+    // initial post (if active editor exists)
+    postEditorName();
+
+    context.subscriptions.push(vscode.window.onDidChangeActiveTextEditor(postEditorName));
+    context.subscriptions.push(vscode.workspace.onDidOpenTextDocument(() => postEditorName()));
+    context.subscriptions.push(vscode.workspace.onDidSaveTextDocument(() => postEditorName()));
   } catch (e) {
     LucidLogger.error('Failed to register WebviewViewProvider for lucid.chatView', e);
   }
@@ -1126,8 +1536,80 @@ export function activate(context: vscode.ExtensionContext) {
       vscode.window.showErrorMessage(`Error sending files: ${e instanceof Error ? e.message : String(e)}`);
     }
   });
-
   context.subscriptions.push(sendFileCommand, sendActiveFileCommand, sendFilesCommand);
+
+  // Send active editor contents (selection or whole file) to Ollama and apply response
+  const sendActiveForEditCommand = vscode.commands.registerCommand('lucid.sendActiveForEdit', async () => {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor) {
+      vscode.window.showInformationMessage('No active editor to send.');
+      return;
+    }
+
+    const doc = editor.document;
+    const selection = editor.selection;
+    const textToSend = selection && !selection.isEmpty ? doc.getText(selection) : doc.getText();
+
+    try {
+      const result = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: 'Sending code to Ollama', cancellable: false }, async () => {
+        // Reuse local headers builder
+        const endpoint = LucidConfig.getEndpoint();
+        const model = LucidConfig.getModelName();
+        const headers = await buildHeadersFromConfig();
+
+        const resp = await fetch(`${endpoint}`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ model: model, messages: [{ role: 'user', content: textToSend }], stream: false })
+        });
+
+        const txt = await resp.text().catch(() => resp.statusText || '');
+        if (!resp.ok) throw new Error(`Ollama error ${resp.status}: ${txt}`);
+
+        // Try to parse known shapes
+        try {
+          const parsed = JSON.parse(txt);
+          // common shapes: { response } or { message: { content } } or { choices: [{ message: { content } }] }
+          if (parsed.response && typeof parsed.response === 'string') return parsed.response;
+          if (parsed.message && parsed.message.content) return parsed.message.content;
+          if (Array.isArray(parsed.choices)) {
+            let out = '';
+            for (const c of parsed.choices) {
+              out += c?.message?.content || c?.text || '';
+            }
+            if (out) return out;
+          }
+          // Fallback to raw text
+          return typeof parsed === 'string' ? parsed : JSON.stringify(parsed, null, 2);
+        } catch (e) {
+          return txt;
+        }
+      });
+
+      if (!result) return;
+
+      // Apply response back into editor
+      await editor.edit(editBuilder => {
+        if (selection && !selection.isEmpty) {
+          editBuilder.replace(selection, result);
+        } else {
+          // No selection: open a new untitled document with the response
+        }
+      });
+
+      if ((!selection || selection.isEmpty) && result) {
+        const newDoc = await vscode.workspace.openTextDocument({ content: result, language: doc.languageId });
+        await vscode.window.showTextDocument(newDoc, { preview: false });
+      }
+
+      vscode.window.showInformationMessage('Ollama response applied to editor.');
+    } catch (e) {
+      vscode.window.showErrorMessage(`Error sending code: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  });
+  context.subscriptions.push(sendActiveForEditCommand);
+
+
 }
 
 export function deactivate() { }
