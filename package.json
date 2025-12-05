@@ -1,7 +1,8 @@
 {
   "name": "lucid-vsx",
-  "displayName": "Lucid VSX (Ollama Integration)",
-  "description": "Integrate local Ollama models into VS Code Copilot Chat",
+  "publisher": "muratoguz",
+  "displayName": "Lucid (Ollama Integration)",
+  "description": "Integrate local Ollama models into VS Code like as Copilot Chat",
   "version": "0.0.1",
   "license": "MIT",
   "repository": {
@@ -11,16 +12,20 @@
   "engines": {
     "vscode": "^1.90.0"
   },
+  "main": "./out/extension.js",
   "categories": [
     "AI",
     "Chat"
   ],
   "activationEvents": [
+    "onView:lucid.chatView",
     "onCommand:lucid.sendFile",
     "onCommand:lucid.sendActiveFile",
-    "onCommand:lucid.sendFiles"
+    "onCommand:lucid.sendFiles",
+    "onCommand:lucid.openChatView",
+    "onCommand:lucid.closeChatView",
+    "onCommand:lucid.dumpState"
   ],
-  "main": "./out/extension.js",
   "contributes": {
     "chatParticipants": [
       {
@@ -47,8 +52,38 @@
       {
         "command": "lucid.sendFiles",
         "title": "Lucid: Send Multiple Files to Ollama"
+      },
+      {
+        "command": "lucid.openChatView",
+        "title": "Lucid: Open Chat View"
+      },
+      {
+        "command": "lucid.closeChatView",
+        "title": "Lucid: Close Chat View"
+      },
+      {
+        "command": "lucid.dumpState",
+        "title": "Lucid: Dump Provider State"
       }
     ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "lucid",
+          "title": "Lucid",
+          "icon": "resources/lucid-icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "lucid": [
+        {
+          "id": "lucid.chatView",
+          "name": "Lucid Chat",
+          "type": "webview"
+        }
+      ]
+    },
     "configuration": {
       "title": "Lucid MCP",
       "properties": {
@@ -87,6 +122,11 @@
           "type": "boolean",
           "default": true,
           "description": "If true, allow unmasked header logging when the extension runs in development mode"
+        },
+        "lucid.enableStreamingStatus": {
+          "type": "boolean",
+          "default": true,
+          "description": "Control whether the chat view shows streaming status (spinner/disabled send) while talking to Ollama"
         }
       }
     }
