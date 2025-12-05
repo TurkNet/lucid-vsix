@@ -20,7 +20,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/your-org/lucid-vsx.git"
+    "url": "https://github.com/TurkNet/lucid-vsix.git"
   },
   "engines": {
     "vscode": "^1.90.0"

@@ -1,26 +1,26 @@
-# Lucid-VSX: Local Ollama Integration for VS Code
+# 🧠 Lucid-VSX: Local Ollama Integration for VS Code
 
-Bu proje, yerel veya ağ üzerindeki bir Ollama API'sini kullanarak VS Code içinde Copilot benzeri bir deneyim sağlar. Eklenti hem Chat Participant (sohbet) hem de inline code completion (ghost text) özelliklerini destekler.
+This project provides a Copilot-like experience within VS Code using a local or network Ollama API. The extension supports both Chat Participant (chat) and inline code completion (ghost text) features.
 
-## Hızlı Başlangıç
+## 🚀 Quick Start
 
-1. Bağımlılıkları yükleyin:
+1. Install dependencies:
 
 ```bash
 npm install
 ```
 
-2. Derleyin:
+2. Compile:
 
 ```bash
 npm run compile
 ```
 
-3. Geliştirme / Debug (Extension Development Host):
+3. Development / Debug (Extension Development Host):
 
-- VS Code'da proje açıldıktan sonra `F5` tuşuna basın. Yeni bir VS Code penceresi (Extension Development Host) açılacak ve eklenti burada yüklü olacaktır.
+- After opening the project in VS Code, press `F5`. A new VS Code window (Extension Development Host) will open with the extension loaded.
 
-4. Ayarları yapılandırın (geliştirme host içinde veya normal VS Code settings):
+4. Configure settings (in development host or normal VS Code settings):
 
 ```json
 {
@@ -28,44 +28,45 @@ npm run compile
   "lucid.ollamaApiKey": "llm-...",
   "lucid.ollamaExtraHeaders": { "X-Request-Source": "post_text_script" },
   "lucid.enableInlineCompletion": true,
-  "lucid.logUnmaskedHeaders": false
+  "lucid.logUnmaskedHeaders": false,
+  "lucid.enableStreamingStatus": false
 }
 ```
 
-5. Eklentiyi normal VS Code penceresinde kullanmak (paketleme):
+5. Using the extension in a normal VS Code window (packaging):
 
 ```bash
 npm run compile
 npm install -g vsce
 vsce package
-# oluşan .vsix'i yükleyin
+# install the generated .vsix
 code --install-extension lucid-vsx-x.x.x.vsix
 ```
 
-## Çalıştırma / Test
+## ▶️ Run / Test
 
-- Geliştirme host (F5) penceresinde Chat panelini açın ve `@lucid` ile sohbet edin.
-- Kod tamamlamayı test etmek için herhangi bir kod dosyasında yazın; eğer `lucid.enableInlineCompletion` açıksa ghost text önerileri gelmelidir.
+- Open the Chat panel in the development host (F5) window and chat with `@lucid`.
+- To test code completion, type in any code file; if `lucid.enableInlineCompletion` is enabled, ghost text suggestions should appear.
 
-## Ortam Değişkenleri ve Header'lar
+## 🔐 Environment Variables and Headers
 
-- `OLLAMA_EXTRA_HEADERS`: JSON biçiminde ek başlıklar. Örnek:
+- `OLLAMA_EXTRA_HEADERS`: Additional headers in JSON format. Example:
 
 ```bash
 export OLLAMA_EXTRA_HEADERS='{"X-Request-Source":"post_text_script"}'
 ```
 
-- `OLLAMA_API_KEY`: API anahtarı (aynı zamanda `lucid.ollamaApiKey` ayarı ile verilebilir):
+- `OLLAMA_API_KEY`: API key (can also be provided via `lucid.ollamaApiKey` setting):
 
 ```bash
 export OLLAMA_API_KEY='tn-llm-...'
 ```
 
-Eklenti `Content-Type: application/json` başlığını otomatik ekler (eğer ayarlarda belirtilmemişse) ve `X-API-Key` başlığıyla API anahtarını gönderir.
+The extension automatically adds the `Content-Type: application/json` header (if not specified in settings) and sends the API key with the `X-API-Key` header.
 
-## Stream / Chunk Testi
+## 🌊 Stream / Chunk Test
 
-Ollama'dan gelen yanıtlar chunk'lar halinde (NDJSON veya satır bazlı) olabilir. Proje içinde bir test sunucusu çalıştırarak akışı simüle edebilirsiniz:
+Responses from Ollama can be in chunks (NDJSON or line-based). You can simulate streaming by running a test server within the project:
 
 ```js
 // tiny-stream-server.js
@@ -75,7 +76,7 @@ http
     res.writeHead(200, { "Content-Type": "application/json" });
     res.write(
       JSON.stringify({
-        choices: [{ message: { role: "assistant", content: "Merhaba" } }],
+        choices: [{ message: { role: "assistant", content: "Hello" } }],
       }) + "\n"
     );
     setTimeout(() => {
@@ -85,7 +86,7 @@ http
             {
               message: {
                 role: "assistant",
-                content: " Nasıl yardımcı olabilirim?",
+                content: " How can I help you?",
               },
             },
           ],
@@ -96,25 +97,21 @@ http
   })
   .listen(8089);
 
-// çalıştır: node tiny-stream-server.js
+// run: node tiny-stream-server.js
 ```
 
-Bu sunucuyu çalıştırıp `lucid.ollamaEndpoint`'i `http://localhost:8089` yaparak extension'ı F5 ile test edebilirsiniz; gelen chunk'lar anında gösterilecektir.
+You can test the extension with F5 by running this server and setting `lucid.ollamaEndpoint` to `http://localhost:8089`; incoming chunks will be displayed instantly.
 
-## Paketleme & Dağıtım
+## 📦 Packaging & Deployment
 
-- `vsce package` ile `.vsix` oluşturun ve `code --install-extension` ile yükleyin.
-- Marketplace'e yayınlamak isterseniz `vsce publish` kullanabilirsiniz (yayınlama öncesi `package.json` metadata'sını güncelleyin).
+- Create a `.vsix` with `vsce package` and install it with `code --install-extension`.
+- If you want to publish to the Marketplace, you can use `vsce publish` (update `package.json` metadata before publishing).
 
-## Hata Ayıklama
+## 🐞 Debugging
 
-- Extension Development Host konsolunda logları görün: `Help → Toggle Developer Tools` veya `Debug Console`.
-- Eğer sunucu JSON parse hatası dönerse, eklenti otomatik olarak `Content-Type: application/json` ekler; yine hata alıyorsanız endpoint yolunu ve beklenen gövde formatını kontrol edin.
+- View logs in the Extension Development Host console: `Help → Toggle Developer Tools` or `Debug Console`.
+- If the server returns a JSON parse error, the extension automatically adds `Content-Type: application/json`; if you still get an error, check the endpoint path and expected body format.
 
-## Güvenlik Notları
+## 🛡️ Security Notes
 
-- `lucid.logUnmaskedHeaders` ayarını `true` yaparsanız hassas başlıklar (ör. `X-API-Key`) loglarda açıkça görünür. Production'da kapalı tutun.
-
----
-
-İsterseniz bu README'ye bir `npm` script (`npm run test-stream`) ekleyip küçük test sunucusunu otomatik başlatacak şekilde ayarlayayım.
+- If you set `lucid.logUnmaskedHeaders` to `true`, sensitive headers (e.g., `X-API-Key`) will be clearly visible in the logs. Keep it disabled in Production.
