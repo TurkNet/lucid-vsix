@@ -8,6 +8,11 @@
 				"kind": "build",
 				"isDefault": true
 			},
+			"options": {
+				"env": {
+					"PATH": "/Users/muratoguz/.nvm/versions/node/v24.11.1/bin:${env:PATH}"
+				}
+			},
 			"problemMatcher": [
 				"$tsc"
 			],
