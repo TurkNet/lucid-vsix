@@ -125,7 +125,7 @@
         },
         "lucid.enableStreamingStatus": {
           "type": "boolean",
-          "default": true,
+          "default": false,
           "description": "Control whether the chat view shows streaming status (spinner/disabled send) while talking to Ollama"
         }
       }

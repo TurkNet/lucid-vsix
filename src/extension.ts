@@ -288,7 +288,7 @@ export function activate(context: vscode.ExtensionContext) {
         content_b64: b64,
       };
 
-      const resp = await fetch(`${endpoint}` , {
+      const resp = await fetch(`${endpoint}`, {
         method: 'POST',
         headers: headers,
         body: JSON.stringify({ model: model, messages: [{ role: 'user', content: JSON.stringify(filePayload) }], stream: false })
@@ -357,7 +357,7 @@ export function activate(context: vscode.ExtensionContext) {
   // --- 5. Webview Sidebar: Lucid Chat ---
   class LucidSidebarProvider implements vscode.WebviewViewProvider {
     private _view?: vscode.WebviewView;
-    constructor(private readonly _extensionUri: vscode.Uri) {}
+    constructor(private readonly _extensionUri: vscode.Uri) { }
 
     public async resolveWebviewView(webviewView: vscode.WebviewView) {
       this._view = webviewView;
@@ -392,12 +392,13 @@ export function activate(context: vscode.ExtensionContext) {
                 webviewView.webview.postMessage({ type: 'error', text });
                 webviewView.webview.postMessage({ type: 'status', text: 'Ollama request failed', level: 'error', streaming: false });
               }
-            } else if (msg?.type === 'clearLogs') {
-              webviewView.webview.postMessage({ type: 'status', text: 'Output cleared', streaming: false });
+            } else if (msg?.type === 'error') {
+              const text = typeof msg.text === 'string' ? msg.text : 'Unknown webview error';
+              LucidLogger.error('Webview reported error:', text);
             }
           } catch (msgErr) {
-              LucidLogger.error('Error handling webview message', msgErr);
-            try { webviewView.webview.postMessage({ type: 'error', text: String(msgErr) }); } catch (_) {}
+            LucidLogger.error('Error handling webview message', msgErr);
+            try { webviewView.webview.postMessage({ type: 'error', text: String(msgErr) }); } catch (_) { }
           }
         });
 
@@ -407,15 +408,15 @@ export function activate(context: vscode.ExtensionContext) {
 
         // Send an initial ready message so the view shows activity immediately
         try {
-          webviewView.webview.postMessage({ type: 'append', text: 'Lucid Chat ready. Write a prompt and click Send.\n' });
+          webviewView.webview.postMessage({ type: 'append', text: 'Lucid Chat ready. Write a prompt and click Send.\n', role: 'system' });
         } catch (e) {
-              LucidLogger.error('Failed to post initial ready message to webview', e);
+          LucidLogger.error('Failed to post initial ready message to webview', e);
         }
       } catch (e) {
         LucidLogger.error('resolveWebviewView top-level error', e);
         try {
           webviewView.webview.html = `<body><pre>Internal error: ${String(e)}</pre></body>`;
-        } catch (_) {}
+        } catch (_) { }
       }
     }
 
@@ -441,18 +442,25 @@ export function activate(context: vscode.ExtensionContext) {
   <style nonce="${nonce}">
     :root { color-scheme: light dark; }
     * { box-sizing: border-box; }
+    html, body {
+      height: 100%;
+    }
     body {
       margin: 0;
       padding: 12px;
       background: var(--vscode-sideBar-background);
       color: var(--vscode-foreground);
       font-family: var(--vscode-font-family);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
     }
     .shell {
       display: flex;
       flex-direction: column;
       gap: 10px;
-      height: 100vh;
+      flex: 1;
+      min-height: 0;
     }
     .messages {
       flex: 1;
@@ -462,6 +470,10 @@ export function activate(context: vscode.ExtensionContext) {
       border-radius: 6px;
       background: var(--vscode-editor-background);
       box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.03);
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      min-height: 0;
     }
     .composer {
       display: flex;
@@ -469,21 +481,83 @@ export function activate(context: vscode.ExtensionContext) {
       gap: 8px;
     }
     .message {
-      margin: 0 0 8px;
-      padding: 8px 10px;
-      border-radius: 5px;
+      display: inline-flex;
+      flex-direction: column;
+      gap: 6px;
+      margin: 0;
+      padding: 10px 12px;
+      border-radius: 8px;
       background: rgba(255, 255, 255, 0.02);
-      white-space: pre-wrap;
-      font-family: var(--vscode-editor-font-family);
+      align-self: flex-start;
+      text-align: left;
+      max-width: 100%;
+      box-shadow: 0 1px 2px rgba(0,0,0,0.15);
+    }
+    .message.assistant {
+      background: rgba(255, 255, 255, 0.02);
     }
     .message.user {
       background: rgba(0, 120, 212, 0.18);
       color: var(--vscode-foreground);
+      align-self: flex-end;
+      text-align: right;
+    }
+    .message.system {
+      border: 1px dashed var(--vscode-descriptionForeground);
+      background: transparent;
+      color: var(--vscode-descriptionForeground);
     }
     .message.error {
       border: 1px solid var(--vscode-errorForeground);
       color: var(--vscode-errorForeground);
       background: transparent;
+    }
+    .message-label {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      opacity: 0.7;
+    }
+    .message.user .message-label {
+      align-self: flex-end;
+    }
+    .message-body {
+      margin: 0;
+      padding: 0;
+      background: transparent;
+      border: none;
+      white-space: normal;
+      font-family: var(--vscode-editor-font-family);
+      font-size: 13px;
+      line-height: 1.4;
+    }
+    .message-body code {
+      font-size: 12px;
+      padding: 0 4px;
+      border-radius: 4px;
+      background: rgba(249, 245, 255, 0.1);
+    }
+    .message-body .code-block {
+      margin: 6px 0;
+      padding: 8px;
+      border-radius: 6px;
+      background: rgba(249, 245, 255, 0.05);
+      border: 1px solid rgba(255,255,255,0.08);
+      overflow-x: auto;
+      font-family: var(--vscode-editor-font-family);
+      font-size: 12px;
+      line-height: 1.6;
+    }
+    .message-body .code-block code {
+      background: transparent;
+      padding: 0;
+    }
+    .message-body .message-list {
+      margin: 4px 0 6px 0;
+      padding-left: 20px;
+    }
+    .message-body .message-list li {
+      margin: 2px 0;
     }
     textarea {
       width: 100%;
@@ -523,11 +597,10 @@ export function activate(context: vscode.ExtensionContext) {
       animation: spin 1s linear infinite;
     }
     @keyframes spin { to { transform: rotate(360deg); } }
-    .buttons {
-      display: flex;
-      gap: 8px;
-    }
     button {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
       border: none;
       border-radius: 4px;
       padding: 6px 14px;
@@ -544,6 +617,12 @@ export function activate(context: vscode.ExtensionContext) {
       opacity: 0.6;
       cursor: not-allowed;
     }
+    .icon-plane {
+      width: 14px;
+      height: 14px;
+      fill: currentColor;
+      flex-shrink: 0;
+    }
   </style>
 </head>
 <body>
@@ -556,10 +635,12 @@ export function activate(context: vscode.ExtensionContext) {
           <div id="spinner" class="spinner" hidden></div>
           <span id="statusText">Idle</span>
         </div>
-        <div class="buttons">
-          <button id="clear" type="button">Clear</button>
-          <button id="send" type="button" class="primary">Send</button>
-        </div>
+        <button id="send" type="button" class="primary" aria-label="Send prompt">
+          <svg class="icon-plane" viewBox="0 0 24 24" role="presentation" focusable="false">
+            <path d="M2.4 11.2l17.3-7.7c.9-.4 1.8.5 1.4 1.4L13.4 22.2c-.4.9-1.8.8-2-.2l-1.7-6.1-6.1-1.7c-1-.3-1.1-1.6-.2-2zM18 6.6L6.9 11.5l3.5 1 .9 3.5L18 6.6z"/>
+          </svg>
+          <span>Send</span>
+        </button>
       </div>
     </div>
   </div>
@@ -570,10 +651,34 @@ export function activate(context: vscode.ExtensionContext) {
       const messages = document.getElementById('messages');
       const promptInput = document.getElementById('prompt');
       const sendBtn = document.getElementById('send');
-      const clearBtn = document.getElementById('clear');
       const statusRoot = document.getElementById('status');
       const statusText = document.getElementById('statusText');
       const spinner = document.getElementById('spinner');
+
+      if (!messages || !promptInput || !sendBtn || !statusRoot || !statusText || !spinner) {
+        console.error('Lucid Chat: missing required DOM nodes', { messages, promptInput, sendBtn, statusRoot, statusText, spinner });
+        return;
+      }
+
+      const reportError = (err, context = 'webview') => {
+        const message = err instanceof Error ? err.message : String(err);
+        console.error('Lucid Chat error:', context, err);
+        try {
+          vscode.postMessage({ type: 'error', text: context + ': ' + message });
+        } catch (postErr) {
+          console.error('Lucid Chat error forwarding failed:', postErr);
+        }
+      };
+
+      window.addEventListener('error', (event) => {
+        if (!event) return;
+        reportError(event.error || event.message || 'Unknown error', 'window.onerror');
+      });
+
+      window.addEventListener('unhandledrejection', (event) => {
+        if (!event) return;
+        reportError(event.reason || 'Unknown rejection', 'unhandledrejection');
+      });
 
       const state = {
         isStreaming: false,
@@ -598,17 +703,85 @@ export function activate(context: vscode.ExtensionContext) {
         }
       };
 
-      const appendBlock = (text, role) => {
+      const trimOverflow = () => {
+        while (state.totalChars > state.maxChars && messages.firstChild) {
+          const first = messages.firstChild;
+          const len = Number(first.dataset?.textLength || first.textContent.length);
+          state.totalChars -= len;
+          messages.removeChild(first);
+        }
+      };
+
+      const escapeHtml = (str = '') => str
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+
+      const inlineCodePattern = new RegExp('\\u0060([^\\u0060]+)\\u0060', 'g');
+      const renderInline = (line = '') => {
+        let html = escapeHtml(line);
+        html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+        html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
+        html = html.replace(inlineCodePattern, '<code>$1</code>');
+        return html;
+      };
+
+      const labelForRole = (role) => {
+        switch (role) {
+          case 'user': return 'You';
+          case 'assistant': return 'Assistant';
+          case 'system': return 'System';
+          case 'error': return 'Error';
+          default: return 'Notice';
+        }
+      };
+
+      const appendBlock = (text, role = 'assistant') => {
+        const safeText = text || '';
         enqueue(() => {
-          const block = document.createElement('pre');
-          block.className = role === 'error' ? 'message error' : role === 'user' ? 'message user' : 'message';
-          block.textContent = text || '';
-          messages.appendChild(block);
-          state.totalChars += block.textContent.length;
-          while (state.totalChars > state.maxChars && messages.firstChild) {
-            state.totalChars -= messages.firstChild.textContent.length;
-            messages.removeChild(messages.firstChild);
+          if (role === 'assistant') {
+            const last = messages.lastElementChild;
+            if (last && last.classList.contains('assistant')) {
+              const body = last.querySelector('.message-body');
+              if (body) {
+                const prevRaw = last.dataset.rawText || '';
+                const nextRaw = prevRaw + safeText;
+                const prevLen = Number(last.dataset.textLength || '0');
+                const nextLen = nextRaw.length;
+                last.dataset.rawText = nextRaw;
+                last.dataset.textLength = String(nextLen);
+                state.totalChars += (nextLen - prevLen);
+                body.innerHTML = nextRaw;
+                trimOverflow();
+                messages.scrollTop = messages.scrollHeight;
+                return;
+              }
+            }
           }
+
+          const block = document.createElement('div');
+          const roleClass =
+            role === 'error' ? 'message error' :
+            role === 'user' ? 'message user' :
+            role === 'system' ? 'message system' :
+            'message assistant';
+          block.className = roleClass;
+
+          const label = document.createElement('div');
+          label.className = 'message-label';
+          label.textContent = labelForRole(role);
+          block.appendChild(label);
+
+          const body = document.createElement('div');
+          body.className = 'message-body';
+          body.innerHTML = safeText;
+          block.appendChild(body);
+
+          block.dataset.rawText = safeText;
+          block.dataset.textLength = String(safeText.length);
+          messages.appendChild(block);
+          state.totalChars += safeText.length;
+          trimOverflow();
           messages.scrollTop = messages.scrollHeight;
         });
       };
@@ -634,13 +807,18 @@ export function activate(context: vscode.ExtensionContext) {
       };
 
       const sendPrompt = () => {
-        const value = promptInput.value.trim();
-        if (!value || state.isStreaming) return;
-        setStatus('Sending prompt…', 'info', true);
-        appendBlock('You: ' + value, 'user');
-        vscode.postMessage({ type: 'send', prompt: value });
-        promptInput.value = '';
-        updateSendState();
+        try {
+          const value = promptInput.value.trim();
+          if (!value || state.isStreaming) return;
+          setStatus('Sending prompt…', 'info', true);
+          appendBlock(value, 'user');
+          vscode.postMessage({ type: 'send', prompt: value });
+          promptInput.value = '';
+          updateSendState();
+        } catch (err) {
+          reportError(err, 'sendPrompt');
+          setStatus('Failed to send prompt', 'error', false);
+        }
       };
 
       promptInput.addEventListener('input', updateSendState);
@@ -652,21 +830,13 @@ export function activate(context: vscode.ExtensionContext) {
       });
 
       sendBtn.addEventListener('click', sendPrompt);
-      clearBtn.addEventListener('click', () => {
-        clearMessages();
-        setStatus('Idle');
-        vscode.postMessage({ type: 'clearLogs' });
-      });
 
       window.addEventListener('message', (event) => {
         const msg = event.data;
         if (!msg) return;
         switch (msg.type) {
           case 'append':
-            appendBlock(msg.text, msg.role);
-            break;
-          case 'clear':
-            clearMessages();
+            appendBlock(msg.text, msg.role || 'assistant');
             break;
           case 'error':
             appendBlock(msg.text || 'Unknown error', 'error');
@@ -754,10 +924,10 @@ export function activate(context: vscode.ExtensionContext) {
               content = parsed;
             }
             if (content) {
-              webview.postMessage({ type: 'append', text: content });
+              webview.postMessage({ type: 'append', text: content, role: 'assistant' });
             }
           } catch (e) {
-            webview.postMessage({ type: 'append', text: trimmed });
+            webview.postMessage({ type: 'append', text: trimmed, role: 'assistant' });
           }
         }
       }
@@ -766,9 +936,9 @@ export function activate(context: vscode.ExtensionContext) {
         try {
           const p = JSON.parse(buffer.trim());
           const content = p?.message?.content || p?.response || '';
-          if (content) webview.postMessage({ type: 'append', text: content });
+          if (content) webview.postMessage({ type: 'append', text: content, role: 'assistant' });
         } catch (e) {
-          webview.postMessage({ type: 'append', text: buffer });
+          webview.postMessage({ type: 'append', text: buffer, role: 'assistant' });
         }
       }
 
@@ -827,7 +997,7 @@ export function activate(context: vscode.ExtensionContext) {
             LucidLogger.debug('_view snapshot', (s._provider as any)._view);
             break;
           }
-        } catch (_) {}
+        } catch (_) { }
       }
       if (sidebarProvider) {
         LucidLogger.debug('sidebarProvider var', sidebarProvider);
