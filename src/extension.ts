@@ -432,11 +432,11 @@ export function activate(context: vscode.ExtensionContext) {
           `script-src 'nonce-${nonce}';`
         ].join(' ');
 
-        return `<!doctype html>
+        const html_content = `<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta http-equiv="Content-Security-Policy" content="${csp}" />
+  <meta http-equiv="Content-Security-Policy" content="${csp}">
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Lucid Chat</title>
   <style nonce="${nonce}">
@@ -450,7 +450,7 @@ export function activate(context: vscode.ExtensionContext) {
       padding: 12px;
       background: var(--vscode-sideBar-background);
       color: var(--vscode-foreground);
-      font-family: var(--vscode-font-family);
+      font-family: var(--vscode-font-family, -apple-system, BlinkMacSystemFont, sans-serif);
       display: flex;
       flex-direction: column;
       overflow: hidden;
@@ -527,7 +527,7 @@ export function activate(context: vscode.ExtensionContext) {
       background: transparent;
       border: none;
       white-space: normal;
-      font-family: var(--vscode-editor-font-family);
+      font-family: var(--vscode-editor-font-family, Menlo, Monaco, "Courier New", monospace);
       font-size: 13px;
       line-height: 1.4;
     }
@@ -538,38 +538,38 @@ export function activate(context: vscode.ExtensionContext) {
       background: rgba(249, 245, 255, 0.1);
     }
     .message-body .code-block {
-      margin: 6px 0;
-      padding: 8px;
+      margin: 10px 0;
+      padding: 12px;
       border-radius: 6px;
       background: rgba(249, 245, 255, 0.05);
       border: 1px solid rgba(255,255,255,0.08);
       overflow-x: auto;
-      font-family: var(--vscode-editor-font-family);
+      font-family: var(--vscode-editor-font-family, Menlo, Monaco, "Courier New", monospace);
       font-size: 12px;
       line-height: 1.6;
+      position: relative;
+      white-space: pre-wrap;
     }
-    .message-body .code-block code {
-      background: transparent;
-      padding: 0;
-    }
-    .message-body .message-list {
-      margin: 4px 0 6px 0;
-      padding-left: 20px;
-    }
-    .message-body .message-list li {
-      margin: 2px 0;
+    .message-body .code-block::before {
+      content: attr(data-lang);
+      position: absolute;
+      top: 6px;
+      right: 8px;
+      font-size: 10px;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: var(--vscode-descriptionForeground);
     }
     textarea {
-      width: 100%;
-      min-height: 80px;
-      max-height: 160px;
       resize: vertical;
       border-radius: 6px;
       padding: 8px;
       border: 1px solid var(--vscode-input-border, transparent);
       background: var(--vscode-input-background);
       color: var(--vscode-input-foreground);
-      font-family: var(--vscode-editor-font-family);
+      font-family: var(--vscode-editor-font-family, Menlo, Monaco, "Courier New", monospace);
+      min-height: 80px;
+      max-height: 160px;
     }
     .controls {
       display: flex;
@@ -637,7 +637,7 @@ export function activate(context: vscode.ExtensionContext) {
         </div>
         <button id="send" type="button" class="primary" aria-label="Send prompt">
           <svg class="icon-plane" viewBox="0 0 24 24" role="presentation" focusable="false">
-            <path d="M2.4 11.2l17.3-7.7c.9-.4 1.8.5 1.4 1.4L13.4 22.2c-.4.9-1.8.8-2-.2l-1.7-6.1-6.1-1.7c-1-.3-1.1-1.6-.2-2zM18 6.6L6.9 11.5l3.5 1 .9 3.5L18 6.6z"/>
+            <path d="M2.4 11.2l17.3-7.7c.9-.4 1.8.5 1.4 1.4L13.4 22.2c-.4.9-1.8.8-2-.2l-1.7-6.1-6.1-1.7c-1-.3-1.1-1.6-.2-2zM18 6.6L6.9 11.5l3.5 1 .9 3.5L18 6.6z"></path>
           </svg>
           <span>Send</span>
         </button>
@@ -646,41 +646,21 @@ export function activate(context: vscode.ExtensionContext) {
   </div>
 
   <script nonce="${nonce}">
-    (() => {
-      const vscode = acquireVsCodeApi();
-      const messages = document.getElementById('messages');
-      const promptInput = document.getElementById('prompt');
-      const sendBtn = document.getElementById('send');
-      const statusRoot = document.getElementById('status');
-      const statusText = document.getElementById('statusText');
-      const spinner = document.getElementById('spinner');
+    (function () {
+      var vscode = acquireVsCodeApi();
+      var messages = document.getElementById('messages');
+      var promptInput = document.getElementById('prompt');
+      var sendBtn = document.getElementById('send');
+      var statusRoot = document.getElementById('status');
+      var statusText = document.getElementById('statusText');
+      var spinner = document.getElementById('spinner');
 
       if (!messages || !promptInput || !sendBtn || !statusRoot || !statusText || !spinner) {
-        console.error('Lucid Chat: missing required DOM nodes', { messages, promptInput, sendBtn, statusRoot, statusText, spinner });
+        console.error('Lucid Chat: missing required DOM nodes');
         return;
       }
 
-      const reportError = (err, context = 'webview') => {
-        const message = err instanceof Error ? err.message : String(err);
-        console.error('Lucid Chat error:', context, err);
-        try {
-          vscode.postMessage({ type: 'error', text: context + ': ' + message });
-        } catch (postErr) {
-          console.error('Lucid Chat error forwarding failed:', postErr);
-        }
-      };
-
-      window.addEventListener('error', (event) => {
-        if (!event) return;
-        reportError(event.error || event.message || 'Unknown error', 'window.onerror');
-      });
-
-      window.addEventListener('unhandledrejection', (event) => {
-        if (!event) return;
-        reportError(event.reason || 'Unknown rejection', 'unhandledrejection');
-      });
-
-      const state = {
+      var state = {
         isStreaming: false,
         queue: [],
         raf: null,
@@ -688,45 +668,116 @@ export function activate(context: vscode.ExtensionContext) {
         maxChars: 50000
       };
 
-      const flushQueue = () => {
+      function flushQueue() {
         state.raf = null;
         while (state.queue.length) {
-          const job = state.queue.shift();
+          var job = state.queue.shift();
           if (job) job();
         }
-      };
+      }
 
-      const enqueue = (job) => {
+      function enqueue(job) {
         state.queue.push(job);
         if (!state.raf) {
-          state.raf = requestAnimationFrame(flushQueue);
+          state.raf = window.requestAnimationFrame(flushQueue);
         }
-      };
+      }
 
-      const trimOverflow = () => {
+      function trimOverflow() {
         while (state.totalChars > state.maxChars && messages.firstChild) {
-          const first = messages.firstChild;
-          const len = Number(first.dataset?.textLength || first.textContent.length);
+          var first = messages.firstChild;
+          var len = Number(first.dataset && first.dataset.textLength ? first.dataset.textLength : first.textContent.length);
           state.totalChars -= len;
           messages.removeChild(first);
         }
-      };
+      }
 
-      const escapeHtml = (str = '') => str
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;');
+      function escapeHtml(str) {
+        if (str === void 0 || str === null) return '';
+        return String(str)
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;');
+      }
 
-      const inlineCodePattern = new RegExp('\\u0060([^\\u0060]+)\\u0060', 'g');
-      const renderInline = (line = '') => {
-        let html = escapeHtml(line);
-        html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-        html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
+      // Inline code: text surrounded by grave accent (backtick), using \u0060 instead of literal backtick
+      var inlineCodePattern = /\\u0060([^\\u0060]+)\\u0060/g;
+
+      function renderInline(line) {
+        if (line === void 0 || line === null) line = '';
+        var html = escapeHtml(line);
+        html = html.replace(/\\*\\*(.+?)\\*\\*/g, '<strong>$1</strong>');
+        html = html.replace(/\\*(.+?)\\*/g, '<em>$1</em>');
         html = html.replace(inlineCodePattern, '<code>$1</code>');
         return html;
-      };
+      }
 
-      const labelForRole = (role) => {
+      // Code fences using three grave accents (no literal backtick in source, use \u0060)
+      var fencePattern = /\\u0060\\u0060\\u0060(\\w+)?\\n([\\s\\S]*?)\\u0060\\u0060\\u0060/g;
+
+      function renderMarkdown(source) {
+        if (!source) return '';
+
+        var codeBlocks = [];
+        var fenced = source.replace(fencePattern, function (_m, lang, code) {
+          var idx = codeBlocks.length;
+          codeBlocks.push({ lang: lang || '', code: code || '' });
+          return '\\n{{CODE_BLOCK_' + idx + '}}\\n';
+        });
+
+        var lines = fenced.replace(/\\r\\n/g, '\\n').split('\\n');
+        var html = '';
+        var inList = false;
+
+        function closeList() {
+          if (inList) {
+            html += '</ul>';
+            inList = false;
+          }
+        }
+
+        for (var i = 0; i < lines.length; i++) {
+          var rawLine = lines[i];
+
+          if (rawLine.indexOf('{{CODE_BLOCK_') === 0) {
+            closeList();
+            var idxMatch = rawLine.match(/\\d+/);
+            var idx = idxMatch ? Number(idxMatch[0]) : 0;
+            var block = codeBlocks[idx];
+            var lang = block && block.lang ? block.lang : '';
+            var code = escapeHtml(block && block.code ? block.code : '');
+            var langClass = lang ? 'language-' + lang.replace(/[^a-z0-9_-]/gi, '') : 'language-plain';
+            var langAttr = lang || 'plain';
+            html += '<pre class="code-block" data-lang="' + langAttr + '"><code class="' + langClass + '">' + code + '</code></pre>';
+            continue;
+          }
+
+          // Bullet list (- item / * item)
+          if (/^\\s*[-*]\\s+/.test(rawLine)) {
+            var content = rawLine.replace(/^\\s*[-*]\\s+/, '');
+            if (!inList) {
+              html += '<ul class="message-list">';
+              inList = true;
+            }
+            html += '<li>' + renderInline(content) + '</li>';
+            continue;
+          }
+
+          closeList();
+
+          if (rawLine.trim() === '') {
+            html += '<br />';
+            continue;
+          }
+
+          html += '<p>' + renderInline(rawLine) + '</p>';
+        }
+
+        closeList();
+        return html;
+      }
+
+      function labelForRole(role) {
         switch (role) {
           case 'user': return 'You';
           case 'assistant': return 'Assistant';
@@ -734,24 +785,26 @@ export function activate(context: vscode.ExtensionContext) {
           case 'error': return 'Error';
           default: return 'Notice';
         }
-      };
+      }
 
-      const appendBlock = (text, role = 'assistant') => {
-        const safeText = text || '';
-        enqueue(() => {
+      function appendBlock(text, role) {
+        if (role === void 0) role = 'assistant';
+        var safeText = text || '';
+        enqueue(function () {
+          // streaming: append to last assistant block if exists
           if (role === 'assistant') {
-            const last = messages.lastElementChild;
+            var last = messages.lastElementChild;
             if (last && last.classList.contains('assistant')) {
-              const body = last.querySelector('.message-body');
+              var body = last.querySelector('.message-body');
               if (body) {
-                const prevRaw = last.dataset.rawText || '';
-                const nextRaw = prevRaw + safeText;
-                const prevLen = Number(last.dataset.textLength || '0');
-                const nextLen = nextRaw.length;
+                var prevRaw = last.dataset.rawText || '';
+                var nextRaw = prevRaw + safeText;
+                var prevLen = Number(last.dataset.textLength || '0');
+                var nextLen = nextRaw.length;
                 last.dataset.rawText = nextRaw;
                 last.dataset.textLength = String(nextLen);
                 state.totalChars += (nextLen - prevLen);
-                body.innerHTML = nextRaw;
+                body.innerHTML = renderMarkdown(nextRaw);
                 trimOverflow();
                 messages.scrollTop = messages.scrollHeight;
                 return;
@@ -759,23 +812,23 @@ export function activate(context: vscode.ExtensionContext) {
             }
           }
 
-          const block = document.createElement('div');
-          const roleClass =
+          var block = document.createElement('div');
+          var roleClass =
             role === 'error' ? 'message error' :
             role === 'user' ? 'message user' :
             role === 'system' ? 'message system' :
             'message assistant';
           block.className = roleClass;
 
-          const label = document.createElement('div');
+          var label = document.createElement('div');
           label.className = 'message-label';
           label.textContent = labelForRole(role);
           block.appendChild(label);
 
-          const body = document.createElement('div');
-          body.className = 'message-body';
-          body.innerHTML = safeText;
-          block.appendChild(body);
+          var bodyEl = document.createElement('div');
+          bodyEl.className = 'message-body';
+          bodyEl.innerHTML = renderMarkdown(safeText);
+          block.appendChild(bodyEl);
 
           block.dataset.rawText = safeText;
           block.dataset.textLength = String(safeText.length);
@@ -784,45 +837,42 @@ export function activate(context: vscode.ExtensionContext) {
           trimOverflow();
           messages.scrollTop = messages.scrollHeight;
         });
-      };
+      }
 
-      const clearMessages = () => {
-        enqueue(() => {
+      function clearMessages() {
+        enqueue(function () {
           messages.textContent = '';
           state.totalChars = 0;
         });
-      };
+      }
 
-      const setStatus = (text, level = 'info', streaming = false) => {
+      function setStatus(text, level, streaming) {
+        if (level === void 0) level = 'info';
+        if (streaming === void 0) streaming = false;
         statusText.textContent = text;
         statusRoot.dataset.level = level;
         state.isStreaming = streaming;
         spinner.hidden = !streaming;
         updateSendState();
-      };
+      }
 
-      const updateSendState = () => {
-        const hasText = promptInput.value.trim().length > 0;
+      function updateSendState() {
+        var hasText = promptInput.value.trim().length > 0;
         sendBtn.disabled = state.isStreaming || !hasText;
-      };
+      }
 
-      const sendPrompt = () => {
-        try {
-          const value = promptInput.value.trim();
-          if (!value || state.isStreaming) return;
-          setStatus('Sending prompt…', 'info', true);
-          appendBlock(value, 'user');
-          vscode.postMessage({ type: 'send', prompt: value });
-          promptInput.value = '';
-          updateSendState();
-        } catch (err) {
-          reportError(err, 'sendPrompt');
-          setStatus('Failed to send prompt', 'error', false);
-        }
-      };
+      function sendPrompt() {
+        var value = promptInput.value.trim();
+        if (!value || state.isStreaming) return;
+        setStatus('Sending prompt…', 'info', true);
+        appendBlock(value, 'user');
+        vscode.postMessage({ type: 'send', prompt: value });
+        promptInput.value = '';
+        updateSendState();
+      }
 
       promptInput.addEventListener('input', updateSendState);
-      promptInput.addEventListener('keydown', (event) => {
+      promptInput.addEventListener('keydown', function (event) {
         if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
           event.preventDefault();
           sendPrompt();
@@ -831,12 +881,15 @@ export function activate(context: vscode.ExtensionContext) {
 
       sendBtn.addEventListener('click', sendPrompt);
 
-      window.addEventListener('message', (event) => {
-        const msg = event.data;
+      window.addEventListener('message', function (event) {
+        var msg = event.data;
         if (!msg) return;
         switch (msg.type) {
           case 'append':
             appendBlock(msg.text, msg.role || 'assistant');
+            break;
+          case 'clear':
+            clearMessages();
             break;
           case 'error':
             appendBlock(msg.text || 'Unknown error', 'error');
@@ -848,12 +901,13 @@ export function activate(context: vscode.ExtensionContext) {
         }
       });
 
-      setStatus('Idle');
+      setStatus('Idle', 'info', false);
       updateSendState();
     })();
   </script>
 </body>
 </html>`;
+        return html_content;
       } catch (e) {
         LucidLogger.error('_getHtmlForWebview error', e);
         return `<body><pre>Failed to render UI: ${String(e)}</pre></body>`;
