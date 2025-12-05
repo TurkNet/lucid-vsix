@@ -95,7 +95,7 @@ export function activate(context: vscode.ExtensionContext) {
       const response = await fetch(`${endpoint}`, {
         method: 'POST',
         headers: combinedExtra,
-        body: JSON.stringify({ model: model, messages: [{ role: 'user', content: request.prompt }], stream: false })
+        body: JSON.stringify({ model: model, messages: fullHistory, stream: false })
       });
 
       if (!response.ok) {

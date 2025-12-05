@@ -25,7 +25,7 @@ npm run compile
 ```json
 {
   "lucid.ollamaEndpoint": "http://<OLLAMA_HOST>:11434",
-  "lucid.ollamaApiKey": "tn-llm-...",
+  "lucid.ollamaApiKey": "llm-...",
   "lucid.ollamaExtraHeaders": { "X-Request-Source": "post_text_script" },
   "lucid.enableInlineCompletion": true,
   "lucid.logUnmaskedHeaders": false
@@ -39,7 +39,7 @@ npm run compile
 npm install -g vsce
 vsce package
 # oluşan .vsix'i yükleyin
-code --install-extension lucid-vsx-0.0.1.vsix
+code --install-extension lucid-vsx-x.x.x.vsix
 ```
 
 ## Çalıştırma / Test
