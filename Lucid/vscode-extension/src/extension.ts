@@ -282,6 +282,50 @@ async function sendFileUri(uri: vscode.Uri): Promise<{ ok: boolean; status: numb
               return;
             }
 
+            if (msg.type === 'replay') {
+              const prompt: string = String(msg.prompt || '');
+              if (!prompt) return;
+              const streamingStatusEnabledReplay = LucidConfig.shouldShowStreamingStatus();
+              webviewView.webview.postMessage({ type: 'status', text: 'Sending prompt…', streaming: streamingStatusEnabledReplay });
+
+              let combinedReplay = '';
+              if (attachedPaths.size > 0) {
+                for (const p of Array.from(attachedPaths)) {
+                  try {
+                    const uri = vscode.Uri.file(p);
+                    const bytes = await vscode.workspace.fs.readFile(uri);
+                    const text = Buffer.from(bytes).toString('utf8');
+                    combinedReplay += `--- ATTACHED: ${p.split('/').pop()} ---\n${text}\n--- END ATTACHED ---\n\n`;
+                  } catch (e) {
+                    LucidLogger.error('Failed to read attached file ' + p, e);
+                  }
+                }
+              } else {
+                try {
+                  const ed = vscode.window.activeTextEditor;
+                  if (ed && ed.document) {
+                    const doc = ed.document;
+                    const fileName = doc.fileName && doc.fileName.length ? path.basename(doc.fileName) : (doc.uri && doc.uri.path ? path.basename(doc.uri.path) : undefined);
+                    const text = doc.getText();
+                    combinedReplay += `--- ACTIVE EDITOR: ${fileName || 'untitled'} ---\n${text}\n--- END ACTIVE EDITOR ---\n\n`;
+                  }
+                } catch (e) {
+                  LucidLogger.debug('Failed to read active editor for fallback attached content', e);
+                }
+              }
+
+              const finalPromptReplay = combinedReplay + '\n' + prompt;
+              try {
+                await sendPromptToOllama(webviewView.webview, finalPromptReplay);
+              } catch (e) {
+                const text = e instanceof Error ? e.message : String(e);
+                LucidLogger.error('sendPromptToOllama (replay) error', e);
+                webviewView.webview.postMessage({ type: 'error', text });
+                webviewView.webview.postMessage({ type: 'status', text: 'Ollama request failed', level: 'error', streaming: false });
+              }
+              return;
+            }
+
             if (msg.type === 'send') {
               const prompt: string = String(msg.prompt || '');
               if (!prompt) return;

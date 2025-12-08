@@ -196,6 +196,11 @@
     #fileList::-webkit-scrollbar { height: 8px; width: 8px; }
     #fileList::-webkit-scrollbar-thumb { background: rgba(128,128,128,0.25); border-radius: 4px; }
     #fileHint { font-size: 11px; color: var(--vscode-descriptionForeground); margin-bottom:6px; display: none; }
+    /* Message action buttons (Replay / Copy) — placed outside the bubble */
+    .message-actions-sibling { display: flex; gap: 6px; margin: 6px 0 12px 0; justify-content: flex-end; }
+    .message-actions-sibling button { width: 36px; height: 28px; padding: 4px; display: inline-flex; align-items: center; justify-content: center; border-radius: 6px; cursor: pointer; background: transparent; border: 1px solid rgba(255,255,255,0.04); color: var(--vscode-foreground); }
+    .message-actions-sibling button:hover { background: rgba(255,255,255,0.02); }
+    .message-actions-sibling svg { width: 16px; height: 16px; fill: currentColor; }
   </style>
 </head>
 <body>
@@ -737,9 +742,90 @@
           bodyEl.innerHTML = renderMarkdown(safeText);
           block.appendChild(bodyEl);
 
+          // Add Replay / Copy buttons as a sibling element (outside the bubble)
+          try {
+            if (role === 'user') {
+              // after appending the message bubble we'll create a sibling div
+              // create a factory for the actions so we can append after the bubble
+              block._createActionsSibling = function () {
+                try {
+                  var actionsDiv = document.createElement('div');
+                  actionsDiv.className = 'message-actions-sibling';
+
+                  var replayBtn = document.createElement('button');
+                  replayBtn.type = 'button';
+                  replayBtn.title = 'Resend (reload) message';
+                  replayBtn.setAttribute('aria-label', 'Resend message');
+                  // Reload/refresh style icon
+                  replayBtn.innerHTML = '<svg fill="#ffffff" width="800px" height="800px" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M23,12A11,11,0,1,1,12,1a10.9,10.9,0,0,1,5.882,1.7l1.411-1.411A1,1,0,0,1,21,2V6a1,1,0,0,1-1,1H16a1,1,0,0,1-.707-1.707L16.42,4.166A8.9,8.9,0,0,0,12,3a9,9,0,1,0,9,9,1,1,0,0,1,2,0Z"/></svg>';
+                  replayBtn.onclick = function () { try { var raw = block.dataset.rawText || safeText || ''; HostBridge.postMessage({ type: 'replay', prompt: raw }); } catch (e) { console.error(e); } };
+
+                  var copyBtn = document.createElement('button');
+                  copyBtn.type = 'button';
+                  copyBtn.title = 'Copy message to clipboard';
+                  copyBtn.setAttribute('aria-label', 'Copy message');
+                  copyBtn.innerHTML = '<svg viewBox="0 0 24 24" role="img" aria-hidden="true"><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"></path></svg>';
+                  copyBtn.onclick = function () {
+                    try {
+                      var txt = block.dataset.rawText || safeText || '';
+                      // helper to toggle icon to tick and revert after delay
+                      function showTickOnce(btn) {
+                        try {
+                          // clear existing timer if any
+                          if (btn._copyTimer) {
+                            clearTimeout(btn._copyTimer);
+                            btn._copyTimer = null;
+                          }
+                          // store original icon markup to restore later
+                          if (!btn._origIcon) btn._origIcon = btn.innerHTML;
+                          btn.innerHTML = '<svg viewBox="0 0 24 24" role="img" aria-hidden="true"><path d="M9 16.2l-3.5-3.5L4 14.2 9 19.2 20 8.2 18.6 6.8z"></path></svg>';
+                          btn.title = 'Copied';
+                          btn.setAttribute('aria-label', 'Copied');
+                          // revert after 5s
+                          btn._copyTimer = setTimeout(function () {
+                            try { btn.innerHTML = btn._origIcon || '';
+                              btn.title = 'Copy message to clipboard';
+                              btn.setAttribute('aria-label', 'Copy message');
+                            } catch (e) { }
+                            btn._copyTimer = null;
+                          }, 5000);
+                        } catch (e) { }
+                      }
+
+                      if (navigator && navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+                        navigator.clipboard.writeText(txt).then(function () { setStatus('Copied to clipboard', 'info', false); showTickOnce(copyBtn); }).catch(function (err) { console.error('copy failed', err); setStatus('Copy failed', 'error', false); });
+                      } else {
+                        var ta = document.createElement('textarea');
+                        ta.value = txt;
+                        document.body.appendChild(ta);
+                        ta.select();
+                        try {
+                          var ok = document.execCommand('copy');
+                          document.body.removeChild(ta);
+                          if (ok) { setStatus('Copied to clipboard', 'info', false); showTickOnce(copyBtn); } else { setStatus('Copy failed', 'error', false); }
+                        } catch (e) { document.body.removeChild(ta); console.error('clipboard fallback failed', e); setStatus('Copy failed', 'error', false); }
+                      }
+                    } catch (e) { console.error(e); setStatus('Copy failed', 'error', false); }
+                  };
+
+                  actionsDiv.appendChild(replayBtn);
+                  actionsDiv.appendChild(copyBtn);
+                  return actionsDiv;
+                } catch (e) { return null; }
+              };
+            }
+          } catch (e) { /* ignore action wiring errors */ }
+
           block.dataset.rawText = safeText;
           block.dataset.textLength = String(safeText.length);
           messages.appendChild(block);
+          // If an actions sibling factory was attached, create and append the sibling
+          try {
+            if (typeof block._createActionsSibling === 'function') {
+              var sibling = block._createActionsSibling();
+              if (sibling) messages.appendChild(sibling);
+            }
+          } catch (e) { /* ignore sibling append errors */ }
           state.totalChars += safeText.length;
           trimOverflow();
           messages.scrollTop = messages.scrollHeight;
