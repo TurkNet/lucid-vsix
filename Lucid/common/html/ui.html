@@ -201,6 +201,7 @@
     .message-actions-sibling button { width: 36px; height: 28px; padding: 4px; display: inline-flex; align-items: center; justify-content: center; border-radius: 6px; cursor: pointer; background: transparent; border: 1px solid rgba(255,255,255,0.04); color: var(--vscode-foreground); }
     .message-actions-sibling button:hover { background: rgba(255,255,255,0.02); }
     .message-actions-sibling svg { width: 16px; height: 16px; fill: currentColor; }
+    .message-separator { height: 1px; background: rgba(128,128,128,0.08); opacity: 1; margin: 12px 0; border-radius: 2px; }
   </style>
 </head>
 <body>
@@ -826,6 +827,15 @@
               if (sibling) messages.appendChild(sibling);
             }
           } catch (e) { /* ignore sibling append errors */ }
+          // Append a thin separator after assistant messages only
+          try {
+            if (role === 'assistant') {
+              var sepAfter = document.createElement('div');
+              sepAfter.className = 'message-separator';
+              sepAfter.setAttribute('aria-hidden', 'true');
+              messages.appendChild(sepAfter);
+            }
+          } catch (e) { }
           state.totalChars += safeText.length;
           trimOverflow();
           messages.scrollTop = messages.scrollHeight;

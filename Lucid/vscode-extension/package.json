@@ -34,8 +34,8 @@
   "activationEvents": [
     "onView:lucid.chatView",
     "onCommand:lucid.sendFile",
-      "onCommand:lucid.sendActiveFile",
-      "onCommand:lucid.sendActiveForEdit",
+    "onCommand:lucid.sendActiveFile",
+    "onCommand:lucid.sendActiveForEdit",
     "onCommand:lucid.sendFiles",
     "onCommand:lucid.openChatView",
     "onCommand:lucid.closeChatView",
