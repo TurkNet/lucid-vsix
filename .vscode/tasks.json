@@ -9,6 +9,7 @@
 				"isDefault": true
 			},
 			"options": {
+				"cwd": "${workspaceFolder}/Lucid/vscode-extension",
 				"env": {
 					"PATH": "/Users/muratoguz/.nvm/versions/node/v24.11.1/bin:${env:PATH}"
 				}

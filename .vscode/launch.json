@@ -5,11 +5,12 @@
             "name": "Run Extension",
             "type": "extensionHost",
             "request": "launch",
+            "cwd": "${workspaceFolder}/Lucid/vscode-extension",
             "args": [
-                "--extensionDevelopmentPath=${workspaceFolder}"
+                "--extensionDevelopmentPath=${workspaceFolder}/Lucid/vscode-extension"
             ],
             "outFiles": [
-                "${workspaceFolder}/out/**/*.js"
+                "${workspaceFolder}/Lucid/vscode-extension/out/**/*.js"
             ],
             "preLaunchTask": "npm: compile"
         }
