@@ -3,7 +3,9 @@
     <TargetFramework>net472</TargetFramework>
     <RootNamespace>Lucid.VisualStudioExtension</RootNamespace>
     <AssemblyName>Lucid.VisualStudioExtension</AssemblyName>
-    <OutputPath>bin\$(Configuration)\</OutputPath>
+    <OutDir>$(MSBuildProjectDirectory)\bin\$(Configuration)\</OutDir>
+    <OutputPath>$(OutDir)</OutputPath>
+    <IntermediateOutputPath>$(MSBuildProjectDirectory)\obj\$(Configuration)\</IntermediateOutputPath>
     <GeneratePkgDefFile>true</GeneratePkgDefFile>
     <IncludeAssemblyInVSIXContainer>true</IncludeAssemblyInVSIXContainer>
     <IncludeDebugSymbolsInVSIXContainer>false</IncludeDebugSymbolsInVSIXContainer>
@@ -22,6 +24,11 @@
   <PropertyGroup>
     <VisualStudioVersion Condition="'$(VisualStudioVersion)' == ''">17.0</VisualStudioVersion>
     <VSToolsPath Condition="'$(VSToolsPath)' == ''">$(MSBuildExtensionsPath32)\Microsoft\VisualStudio\v$(VisualStudioVersion)</VSToolsPath>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <VSSDKNuGetPath Condition="'$(VSSDKNuGetPath)' == '' and '$(NuGetPackageRoot)' != ''">$(NuGetPackageRoot)microsoft.vssdk.buildtools\17.6.2164\tools\VSSDK</VSSDKNuGetPath>
+    <VSSDKNuGetPath Condition="'$(VSSDKNuGetPath)' == '' and '$(USERPROFILE)' != ''">$(USERPROFILE)\.nuget\packages\microsoft.vssdk.buildtools\17.6.2164\tools\VSSDK</VSSDKNuGetPath>
   </PropertyGroup>
 
   <ItemGroup>
@@ -49,4 +56,5 @@
 
   <Import Project="$(VSToolsPath)\VSSDK\Microsoft.VsSDK.targets" Condition="Exists('$(VSToolsPath)\VSSDK\Microsoft.VsSDK.targets')" />
   <Import Project="$(MSBuildExtensionsPath32)\Microsoft\VisualStudio\v$(VisualStudioVersion)\VSSDK\Microsoft.VsSDK.targets" Condition="!Exists('$(VSToolsPath)\VSSDK\Microsoft.VsSDK.targets') AND Exists('$(MSBuildExtensionsPath32)\Microsoft\VisualStudio\v$(VisualStudioVersion)\VSSDK\Microsoft.VsSDK.targets')" />
+  <Import Project="$(VSSDKNuGetPath)\Microsoft.VsSDK.targets" Condition="Exists('$(VSSDKNuGetPath)\Microsoft.VsSDK.targets')" />
 </Project>
