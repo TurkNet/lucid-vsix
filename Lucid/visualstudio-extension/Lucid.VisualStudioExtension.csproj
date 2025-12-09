@@ -36,4 +36,9 @@
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </Content>
   </ItemGroup>
+
+  <Target Name="AfterBuild">
+    <Message Importance="high" Text="Creating VSIX package..." />
+    <CallTarget Targets="CreateVsixContainer" />
+  </Target>
 </Project>
