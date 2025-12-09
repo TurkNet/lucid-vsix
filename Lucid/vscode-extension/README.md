@@ -82,6 +82,43 @@ vsce package
 code --install-extension lucid-vsx-x.x.x.vsix
 ```
 
+## 🕹️ Ask vs Action Modes
+
+- Switch between `Ask` (plain chat) and `Action` (request executable steps) via the dropdown under the chat input.
+- `Action` responses must include a JSON block with at least a `command` plus optional `args`, `type` (`vscode` | `terminal` | `clipboard`), and `text` when copying to the clipboard.
+- Lucid always shows the parsed payload and asks for confirmation before running it, then streams back an execution summary and validates the outcome with Ollama.
+
+Examples:
+
+```jsonc
+// Run a VS Code command
+{
+  "command": "workbench.action.files.save"
+}
+
+// Execute a terminal step
+{
+  "command": "npm",
+  "args": ["run", "test"],
+  "type": "terminal"
+}
+
+// Copy generated text
+{
+  "command": "copy-to-clipboard",
+  "type": "clipboard",
+  "text": "git commit -am \"fix: address bug\""
+}
+```
+
+## ✨ What's New Since The Last Commit
+
+- **Persistent chat history:** every exchange (including action previews) is saved per workspace, so reopening the view restores the full thread and lets you replay prompts without losing context.
+- **Mode-aware replays:** the `Ask/Action` choice is stored with each message, making replays use the original intent automatically and keeping your preferred mode between sessions.
+- **Richer action previews:** toolbar buttons now let you run terminal commands, apply or insert suggested snippets, copy artifacts, and inspect the raw JSON payload without leaving the chat.
+- **Safer terminal execution:** wrapper commands such as `terminal.runShellCommand` are stripped before execution so only the actual payload (e.g., `./set_version.sh`) is sent to the shell, preventing accidental wrapper text from running.
+- **Stable UI state:** the chat panel no longer clears itself when hosts emit `type: "clear"` messages, so status banners and prior answers remain visible during debugging.
+
 ## ▶️ Run / Test
 
 - Open the Chat panel in the development host (F5) window and chat with `@lucid`.

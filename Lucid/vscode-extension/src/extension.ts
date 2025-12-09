@@ -4,8 +4,56 @@ import * as fs from 'fs';
 import { CurlLogger } from '../../common/log/curlLogger';
 import { LucidConfig } from '../../common/config';
 import { LucidLogger } from '../../common/log/logger';
+import { AskHandler } from './chat/askHandler';
+import { ActionHandler } from './chat/actionHandler';
+import { ChatHistoryManager, HistoryEntry } from './chat/historyManager';
 
 let extensionContext: vscode.ExtensionContext | undefined;
+let askHandler: AskHandler;
+let actionHandler: ActionHandler;
+let historyManager: ChatHistoryManager;
+
+async function recordHistory(entry: Omit<HistoryEntry, 'timestamp'> & { timestamp?: number }) {
+  try {
+    if (!historyManager) return;
+    await historyManager.appendEntry({
+      role: entry.role,
+      text: entry.text,
+      mode: entry.mode,
+      actionPreview: entry.actionPreview,
+      timestamp: entry.timestamp ?? Date.now()
+    });
+  } catch (err) {
+    LucidLogger.debug('recordHistory error', err);
+  }
+}
+const chatViewRegistry = new Set<vscode.WebviewView>();
+let isStartupFinished = false;
+
+function postReadyStateToViews(target?: vscode.WebviewView) {
+  const payload = {
+    type: 'readyState',
+    ready: isStartupFinished,
+    message: isStartupFinished ? 'Lucid is ready' : 'Waiting for Lucid startup…'
+  };
+  const views = target ? [target] : Array.from(chatViewRegistry);
+  for (const view of views) {
+    try {
+      view.webview.postMessage(payload);
+    } catch (err) {
+      LucidLogger.debug('Failed to post readyState to webview', err);
+    }
+  }
+}
+
+function markStartupFinished() {
+  if (isStartupFinished) {
+    postReadyStateToViews();
+    return;
+  }
+  isStartupFinished = true;
+  postReadyStateToViews();
+}
 
 interface OllamaMessage {
   role: string;
@@ -29,6 +77,9 @@ interface OllamaGenerateResponse {
   done: boolean;
 }
 
+type SendMode = 'ask' | 'action';
+const LAST_MODE_STATE_KEY = 'lucid.lastSendMode';
+
 const INLINE_MAX_PREFIX_CHARS = 2000;
 const INLINE_MAX_SUFFIX_CHARS = 500;
 const INLINE_MAX_COMPLETION_CHARS = 400;
@@ -44,6 +95,24 @@ interface InlineContext {
 
 let lastInlineRequestTimestamp = 0;
 let lastInlineCache: { key: string; completion: string; timestamp: number } | undefined;
+
+function getStoredSendMode(): SendMode {
+  try {
+    const stored = extensionContext?.workspaceState.get<SendMode>(LAST_MODE_STATE_KEY);
+    return stored === 'action' ? 'action' : 'ask';
+  } catch (err) {
+    LucidLogger.debug('getStoredSendMode error', err);
+    return 'ask';
+  }
+}
+
+async function persistSendMode(mode: SendMode): Promise<void> {
+  try {
+    await extensionContext?.workspaceState.update(LAST_MODE_STATE_KEY, mode);
+  } catch (err) {
+    LucidLogger.debug('persistSendMode error', err);
+  }
+}
 
 function describeLanguageDirective(languageId: string): string {
   switch (languageId) {
@@ -175,193 +244,21 @@ async function requestInlineCompletionFromOllama(prompt: string, signal?: AbortS
   }
 }
 
-function getNonce(): string {
+    function getNonce(): string {
   const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
   let nonce = '';
   for (let i = 0; i < 24; i++) nonce += chars.charAt(Math.floor(Math.random() * chars.length));
   return nonce;
 }
 
-async function buildHeadersFromConfig(): Promise<Record<string, string>> {
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-  try {
-    const apiKey = LucidConfig.getApiKey();
-    const apiKeyHeaderName = LucidConfig.getApiKeyHeaderName();
-    LucidLogger.debug('apiKeyHeaderName resolved', apiKeyHeaderName);
-    if (typeof console !== 'undefined') console.log('apiKeyHeaderName=', apiKeyHeaderName);
-    if (apiKey && apiKey.length) headers[apiKeyHeaderName] = `${apiKey}`;
-    const extra = LucidConfig.getExtraHeaders() || {};
-    for (const k of Object.keys(extra)) {
-      try { headers[k] = String((extra as any)[k]); } catch (_) { }
-    }
-  } catch (e) {
-    LucidLogger.debug('buildHeadersFromConfig error', e);
-  }
-  return headers;
-}
 
-// Send a file's contents to the Ollama endpoint and return a normalized response
-async function sendFileUri(uri: vscode.Uri): Promise<{ ok: boolean; status: number; text: string; json?: any }> {
-  try {
-    const bytes = await vscode.workspace.fs.readFile(uri);
-    const text = Buffer.from(bytes).toString('utf8');
-    const endpoint = LucidConfig.getEndpoint();
-    const model = LucidConfig.getModelName();
-    const headers = await buildHeadersFromConfig();
-
-    const resp = await fetch(endpoint, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ model: model, messages: [{ role: 'user', content: text }], stream: false })
-    });
-
-    const bodyText = await resp.text().catch(() => resp.statusText || '');
-    let parsed: any = undefined;
-    try { parsed = JSON.parse(bodyText); } catch (_) { parsed = undefined; }
-
-    // Provide simple interactive actions to the user from the caller
-    if (resp.ok) {
-      // Attempt to surface useful actions if the response contains urls or ids
-      const urls: string[] = [];
-      const id = parsed && parsed.id ? String(parsed.id) : undefined;
-      // if parsed contains fields with http(s) strings, collect them (best-effort)
-      try {
-        const maybe = parsed || {};
-        for (const k of Object.keys(maybe)) {
-          const v = maybe[k];
-          if (typeof v === 'string' && (v.startsWith('http://') || v.startsWith('https://'))) urls.push(v);
-          if (Array.isArray(v)) {
-            for (const item of v) if (typeof item === 'string' && (item.startsWith('http://') || item.startsWith('https://'))) urls.push(item);
-          }
-        }
-      } catch (_) { }
-
-      if (urls.length > 0 || id || parsed) {
-        const actions: string[] = [];
-        if (urls.length > 0) actions.push('Open URL');
-        if (id) actions.push('Copy ID');
-        actions.push('Show Raw');
-
-        const pick = await vscode.window.showInformationMessage(`File sent — status ${resp.status}`, ...actions);
-        if (pick === 'Open URL' && urls.length > 0) {
-          const pickUrl = urls.length === 1 ? urls[0] : await vscode.window.showQuickPick(urls, { placeHolder: 'Select URL to open' });
-          if (pickUrl) await vscode.env.openExternal(vscode.Uri.parse(pickUrl));
-        } else if (pick === 'Copy ID' && id) {
-          await vscode.env.clipboard.writeText(String(id));
-          vscode.window.showInformationMessage('ID copied to clipboard');
-        } else if (pick === 'Show Raw') {
-          const doc = await vscode.workspace.openTextDocument({ content: JSON.stringify(parsed || bodyText, null, 2), language: 'json' });
-          await vscode.window.showTextDocument(doc, { preview: true });
-        }
-      }
-
-    }
-
-    return { ok: resp.ok, status: resp.status, text: bodyText, json: parsed };
-  } catch (e) {
-    LucidLogger.error('sendFileUri error', e);
-    return { ok: false, status: 0, text: String(e) };
-  }
-}
-
-
-
-  // Stream chunked Ollama responses to the webview and keep the UI informed via status messages.
-  async function sendPromptToOllama(webview: vscode.Webview, prompt: string) {
-    const endpoint = LucidConfig.getEndpoint();
-    const model = LucidConfig.getModelName();
-    const headers = await buildHeadersFromConfig();
-    const streamingStatusEnabled = LucidConfig.shouldShowStreamingStatus();
-
-    try {
-      CurlLogger.log({
-        url: endpoint,
-        headers,
-        body: { model, messages: [{ role: 'user', content: prompt }], stream: streamingStatusEnabled },
-        label: 'CURL sendPromptToOllama',
-        revealSensitive: extensionContext ? CurlLogger.shouldRevealSensitive(extensionContext) : false
-      });
-
-      webview.postMessage({ type: 'status', text: 'Connecting to Ollama…', streaming: streamingStatusEnabled });
-      const response = await fetch(`${endpoint}`, {
-        method: 'POST',
-        headers: headers,
-        body: JSON.stringify({ model: model, messages: [{ role: 'user', content: prompt }], stream: streamingStatusEnabled })
-      });
-
-      if (!response.ok) {
-        const txt = await response.text().catch(() => response.statusText);
-        throw new Error(`Ollama error ${response.status}: ${txt}`);
-      }
-      if (!response.body) {
-        throw new Error('No response body from Ollama');
-      }
-
-      webview.postMessage({ type: 'status', text: 'Streaming response…', streaming: streamingStatusEnabled });
-
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        // buffer = lines.pop() || '';
-
-        for (const line of lines) {
-          const trimmed = line.trim();
-          if (!trimmed) continue;
-          try {
-            const parsed = JSON.parse(trimmed);
-            let content = '';
-            if (parsed.choices && Array.isArray(parsed.choices)) {
-              for (const c of parsed.choices) {
-                const msg = c?.message?.content || c?.text || c?.response || c?.delta?.content;
-                if (msg) content += String(msg);
-              }
-            } else if (parsed.message && parsed.message.content) {
-              content = parsed.message.content;
-            } else if (parsed.response) {
-              content = parsed.response;
-            } else if (typeof parsed === 'string') {
-              content = parsed;
-            }
-            if (content) {
-              webview.postMessage({ type: 'append', text: content, role: 'assistant' });
-            }
-          } catch (e) {
-            webview.postMessage({ type: 'append', text: trimmed, role: 'assistant' });
-          }
-        }
-      }
-
-      if (buffer.trim()) {
-        try {
-          const p = JSON.parse(buffer.trim());
-          const content = p?.message?.content || p?.response || '';
-          if (content) webview.postMessage({ type: 'append', text: content, role: 'assistant' });
-        } catch (e) {
-          webview.postMessage({ type: 'append', text: buffer, role: 'assistant' });
-        }
-      }
-
-      webview.postMessage({ type: 'status', text: 'Idle', streaming: false });
-    } catch (err) {
-      webview.postMessage({ type: 'status', text: err instanceof Error ? err.message : 'Ollama request failed', level: 'error', streaming: false });
-      throw err;
-    }
-  }
-
-
-    // --- 5. Webview Sidebar: Lucid Chat ---
   class LucidSidebarProvider implements vscode.WebviewViewProvider {
     private _view?: vscode.WebviewView;
     constructor(private readonly _extensionUri: vscode.Uri) { }
 
     public async resolveWebviewView(webviewView: vscode.WebviewView) {
       this._view = webviewView;
+      chatViewRegistry.add(webviewView);
       LucidLogger.debug('resolveWebviewView called');
       try {
         webviewView.webview.options = {
@@ -385,6 +282,8 @@ async function sendFileUri(uri: vscode.Uri): Promise<{ ok: boolean; status: numb
 
           async function listWorkspaceFiles() {
             try {
+
+
               const folders = vscode.workspace.workspaceFolders || [];
               if (folders.length === 0) return [];
               // Prefer files under the first workspace folder (common simple case)
@@ -428,46 +327,53 @@ async function sendFileUri(uri: vscode.Uri): Promise<{ ok: boolean; status: numb
               return;
             }
 
+            if (msg.type === 'previewApplySnippet' || msg.type === 'previewInsertSnippet') {
+              const snippet = typeof msg.snippet === 'string' ? msg.snippet : '';
+              if (!snippet) return;
+              const operation: 'replace' | 'insert' = msg.type === 'previewApplySnippet' ? 'replace' : 'insert';
+              const applied = await applySnippetToActiveEditor(snippet, operation);
+              const statusText = applied
+                ? (operation === 'replace' ? 'Snippet applied to editor.' : 'Snippet inserted at cursor.')
+                : 'Open an editor to use snippet actions.';
+              webviewView.webview.postMessage({ type: 'status', text: statusText, level: applied ? 'info' : 'warning', streaming: false });
+              return;
+            }
+
+            if (msg.type === 'modeChanged') {
+              const newMode: SendMode = msg.mode === 'action' ? 'action' : 'ask';
+              await persistSendMode(newMode);
+              return;
+            }
+
+            if (msg.type === 'actionRun') {
+              const actionId = typeof msg.actionId === 'string' ? msg.actionId : '';
+              if (!actionId) return;
+              await actionHandler.runPendingAction(actionId, webviewView.webview);
+              return;
+            }
+
             if (msg.type === 'replay') {
               const prompt: string = String(msg.prompt || '');
               if (!prompt) return;
-              const streamingStatusEnabledReplay = LucidConfig.shouldShowStreamingStatus();
-              webviewView.webview.postMessage({ type: 'status', text: 'Sending prompt…', streaming: streamingStatusEnabledReplay });
-
-              let combinedReplay = '';
-              if (attachedPaths.size > 0) {
-                for (const p of Array.from(attachedPaths)) {
-                  try {
-                    const uri = vscode.Uri.file(p);
-                    const bytes = await vscode.workspace.fs.readFile(uri);
-                    const text = Buffer.from(bytes).toString('utf8');
-                    combinedReplay += `--- ATTACHED: ${p.split('/').pop()} ---\n${text}\n--- END ATTACHED ---\n\n`;
-                  } catch (e) {
-                    LucidLogger.error('Failed to read attached file ' + p, e);
-                  }
-                }
-              } else {
-                try {
-                  const ed = vscode.window.activeTextEditor;
-                  if (ed && ed.document) {
-                    const doc = ed.document;
-                    const fileName = doc.fileName && doc.fileName.length ? path.basename(doc.fileName) : (doc.uri && doc.uri.path ? path.basename(doc.uri.path) : undefined);
-                    const text = doc.getText();
-                    combinedReplay += `--- ACTIVE EDITOR: ${fileName || 'untitled'} ---\n${text}\n--- END ACTIVE EDITOR ---\n\n`;
-                  }
-                } catch (e) {
-                  LucidLogger.debug('Failed to read active editor for fallback attached content', e);
-                }
+              const mode: SendMode = msg.mode === 'action' ? 'action' : 'ask';
+              if (mode === 'ask') {
+                const streamingStatusEnabledReplay = LucidConfig.shouldShowStreamingStatus();
+                webviewView.webview.postMessage({ type: 'status', text: 'Sending prompt…', streaming: streamingStatusEnabledReplay });
               }
-
-              const finalPromptReplay = combinedReplay + '\n' + prompt;
               try {
-                await sendPromptToOllama(webviewView.webview, finalPromptReplay);
+                await recordHistory({ role: 'user', text: prompt, mode });
+                const contextualPromptReplay = await buildPromptWithContext(prompt, attachedPaths);
+                if (mode === 'action') {
+                  const actionPromptReplay = buildActionInstructionPrompt(contextualPromptReplay, prompt);
+                  await actionHandler.handleActionFlow(webviewView.webview, actionPromptReplay, prompt);
+                } else {
+                  await askHandler.sendPrompt(webviewView.webview, contextualPromptReplay);
+                }
               } catch (e) {
                 const text = e instanceof Error ? e.message : String(e);
-                LucidLogger.error('sendPromptToOllama (replay) error', e);
+                LucidLogger.error('Replay request error', e);
                 webviewView.webview.postMessage({ type: 'error', text });
-                webviewView.webview.postMessage({ type: 'status', text: 'Ollama request failed', level: 'error', streaming: false });
+                webviewView.webview.postMessage({ type: 'status', text: 'Request failed', level: 'error', streaming: false });
               }
               return;
             }
@@ -475,45 +381,26 @@ async function sendFileUri(uri: vscode.Uri): Promise<{ ok: boolean; status: numb
             if (msg.type === 'send') {
               const prompt: string = String(msg.prompt || '');
               if (!prompt) return;
-              const streamingStatusEnabled = LucidConfig.shouldShowStreamingStatus();
-              webviewView.webview.postMessage({ type: 'status', text: 'Sending prompt…', streaming: streamingStatusEnabled });
-
-              let combined = '';
-              if (attachedPaths.size > 0) {
-                for (const p of Array.from(attachedPaths)) {
-                  try {
-                    const uri = vscode.Uri.file(p);
-                    const bytes = await vscode.workspace.fs.readFile(uri);
-                    const text = Buffer.from(bytes).toString('utf8');
-                    combined += `--- ATTACHED: ${p.split('/').pop()} ---\n${text}\n--- END ATTACHED ---\n\n`;
-                  } catch (e) {
-                    LucidLogger.error('Failed to read attached file ' + p, e);
-                  }
-                }
-              } else {
-                // No attached files: fall back to the active editor's contents (if any)
-                try {
-                  const ed = vscode.window.activeTextEditor;
-                  if (ed && ed.document) {
-                    const doc = ed.document;
-                    const fileName = doc.fileName && doc.fileName.length ? path.basename(doc.fileName) : (doc.uri && doc.uri.path ? path.basename(doc.uri.path) : undefined);
-                    const text = doc.getText();
-                    combined += `--- ACTIVE EDITOR: ${fileName || 'untitled'} ---\n${text}\n--- END ACTIVE EDITOR ---\n\n`;
-                  }
-                } catch (e) {
-                  LucidLogger.debug('Failed to read active editor for fallback attached content', e);
-                }
+              const mode: SendMode = msg.mode === 'action' ? 'action' : 'ask';
+              if (mode === 'ask') {
+                const streamingStatusEnabled = LucidConfig.shouldShowStreamingStatus();
+                webviewView.webview.postMessage({ type: 'status', text: 'Sending prompt…', streaming: streamingStatusEnabled });
               }
 
-              const finalPrompt = combined + '\n' + prompt;
-
               try {
-                await sendPromptToOllama(webviewView.webview, finalPrompt);
+                await recordHistory({ role: 'user', text: prompt, mode });
+                const contextualPrompt = await buildPromptWithContext(prompt, attachedPaths);
+                if (mode === 'action') {
+                  const actionPrompt = buildActionInstructionPrompt(contextualPrompt, prompt);
+                  await actionHandler.handleActionFlow(webviewView.webview, actionPrompt, prompt);
+                } else {
+                  await askHandler.sendPrompt(webviewView.webview, contextualPrompt);
+                }
               } catch (e) {
                 const text = e instanceof Error ? e.message : String(e);
-                LucidLogger.error('sendPromptToOllama error', e);
+                LucidLogger.error('Prompt handling error', e);
                 webviewView.webview.postMessage({ type: 'error', text });
-                webviewView.webview.postMessage({ type: 'status', text: 'Ollama request failed', level: 'error', streaming: false });
+                webviewView.webview.postMessage({ type: 'status', text: 'Request failed', level: 'error', streaming: false });
               }
               return;
             }
@@ -531,6 +418,8 @@ async function sendFileUri(uri: vscode.Uri): Promise<{ ok: boolean; status: numb
 
         webviewView.onDidDispose(() => {
           LucidLogger.debug('webviewView disposed');
+          actionHandler.clearPendingActionsForWebview(webviewView.webview);
+          chatViewRegistry.delete(webviewView);
         });
 
         // Send an initial ready message so the view shows activity immediately
@@ -539,6 +428,32 @@ async function sendFileUri(uri: vscode.Uri): Promise<{ ok: boolean; status: numb
         } catch (e) {
           LucidLogger.error('Failed to post initial ready message to webview', e);
         }
+
+        try {
+          const stored = historyManager?.getEntries() || [];
+          if (stored.length > 0) {
+            const historyPayload = stored.map(entry => ({
+              text: entry.text,
+              role: entry.role,
+              options: {
+                sendMode: entry.mode,
+                actionPreview: entry.actionPreview ? { ...entry.actionPreview } : undefined
+              }
+            }));
+            webviewView.webview.postMessage({ type: 'history', entries: historyPayload });
+          }
+        } catch (historyErr) {
+          LucidLogger.error('Failed to deliver history to webview', historyErr);
+        }
+
+        try {
+          const storedMode = getStoredSendMode();
+          webviewView.webview.postMessage({ type: 'modePreference', mode: storedMode });
+        } catch (modeErr) {
+          LucidLogger.error('Failed to deliver mode preference to webview', modeErr);
+        }
+
+        postReadyStateToViews(webviewView);
       } catch (e) {
         LucidLogger.error('resolveWebviewView top-level error', e);
         try {
@@ -571,39 +486,48 @@ async function sendFileUri(uri: vscode.Uri): Promise<{ ok: boolean; status: numb
     }
   }
 
-  export function activate(context: vscode.ExtensionContext) {
+
+
+
+  export async function activate(context: vscode.ExtensionContext) {
     extensionContext = context;
+    let activationError: unknown;
+    try {
+      historyManager = new ChatHistoryManager(context);
+      await historyManager.initialize();
+      askHandler = new AskHandler(() => buildHeadersFromConfig(), () => extensionContext, historyManager);
+      actionHandler = new ActionHandler(askHandler, () => buildHeadersFromConfig(), () => extensionContext, historyManager);
 
-  // Register the sidebar provider (log registration errors to help debugging)
-  let sidebarProvider: LucidSidebarProvider | undefined;
-  try {
-    sidebarProvider = new LucidSidebarProvider(context.extensionUri);
-    context.subscriptions.push(vscode.window.registerWebviewViewProvider('lucid.chatView', sidebarProvider));
-    LucidLogger.debug('Registered WebviewViewProvider for lucid.chatView');
-    // Post current active editor filename to the webview when available and on changes
-    const postEditorName = (editor?: vscode.TextEditor) => {
+      // Register the sidebar provider (log registration errors to help debugging)
+      let sidebarProvider: LucidSidebarProvider | undefined;
       try {
-        const ed = editor || vscode.window.activeTextEditor;
-        if (!ed) return;
-        const view = (sidebarProvider as any)?._view;
-        if (!view) return;
-        const doc = ed.document;
-        const fileName = doc.fileName && doc.fileName.length ? path.basename(doc.fileName) : (doc.uri && doc.uri.path ? path.basename(doc.uri.path) : doc.uri.toString());
-        view.webview.postMessage({ type: 'editor', text: fileName });
+        sidebarProvider = new LucidSidebarProvider(context.extensionUri);
+        context.subscriptions.push(vscode.window.registerWebviewViewProvider('lucid.chatView', sidebarProvider));
+        LucidLogger.debug('Registered WebviewViewProvider for lucid.chatView');
+        // Post current active editor filename to the webview when available and on changes
+        const postEditorName = (editor?: vscode.TextEditor) => {
+          try {
+            const ed = editor || vscode.window.activeTextEditor;
+            if (!ed) return;
+            const view = (sidebarProvider as any)?._view;
+            if (!view) return;
+            const doc = ed.document;
+            const fileName = doc.fileName && doc.fileName.length ? path.basename(doc.fileName) : (doc.uri && doc.uri.path ? path.basename(doc.uri.path) : doc.uri.toString());
+            view.webview.postMessage({ type: 'editor', text: fileName });
+          } catch (e) {
+            LucidLogger.debug('postEditorName error', e);
+          }
+        };
+
+        // initial post (if active editor exists)
+        postEditorName();
+
+        context.subscriptions.push(vscode.window.onDidChangeActiveTextEditor(postEditorName));
+        context.subscriptions.push(vscode.workspace.onDidOpenTextDocument(() => postEditorName()));
+        context.subscriptions.push(vscode.workspace.onDidSaveTextDocument(() => postEditorName()));
       } catch (e) {
-        LucidLogger.debug('postEditorName error', e);
+        LucidLogger.error('Failed to register WebviewViewProvider for lucid.chatView', e);
       }
-    };
-
-    // initial post (if active editor exists)
-    postEditorName();
-
-    context.subscriptions.push(vscode.window.onDidChangeActiveTextEditor(postEditorName));
-    context.subscriptions.push(vscode.workspace.onDidOpenTextDocument(() => postEditorName()));
-    context.subscriptions.push(vscode.workspace.onDidSaveTextDocument(() => postEditorName()));
-  } catch (e) {
-    LucidLogger.error('Failed to register WebviewViewProvider for lucid.chatView', e);
-  }
 
   try {
     const selector: vscode.DocumentSelector = [
@@ -856,9 +780,182 @@ async function sendFileUri(uri: vscode.Uri): Promise<{ ok: boolean; status: numb
       vscode.window.showErrorMessage(`Error sending code: ${e instanceof Error ? e.message : String(e)}`);
     }
   });
-  context.subscriptions.push(sendActiveForEditCommand);
+      context.subscriptions.push(sendActiveForEditCommand);
 
+    } catch (err) {
+      activationError = err;
+      LucidLogger.error('Lucid activate error', err);
+    } finally {
+      markStartupFinished();
+      if (activationError) {
+        vscode.window.showWarningMessage('Lucid extension encountered an initialization issue. Some features may be unavailable. Check logs for details.');
+      }
+    }
+}
 
+async function buildHeadersFromConfig(): Promise<Record<string, string>> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  try {
+    const apiKey = LucidConfig.getApiKey();
+    const apiKeyHeaderName = LucidConfig.getApiKeyHeaderName();
+    LucidLogger.debug('apiKeyHeaderName resolved', apiKeyHeaderName);
+    if (apiKey && apiKey.length) headers[apiKeyHeaderName] = `${apiKey}`;
+    const extra = LucidConfig.getExtraHeaders() || {};
+    for (const k of Object.keys(extra)) {
+      try { headers[k] = String((extra as any)[k]); } catch (_) { }
+    }
+  } catch (e) {
+    LucidLogger.debug('buildHeadersFromConfig error', e);
+  }
+  return headers;
+}
+
+async function sendFileUri(uri: vscode.Uri): Promise<{ ok: boolean; status: number; text: string; json?: any }> {
+  try {
+    const bytes = await vscode.workspace.fs.readFile(uri);
+    const text = Buffer.from(bytes).toString('utf8');
+    const endpoint = LucidConfig.getEndpoint();
+    const model = LucidConfig.getModelName();
+    const headers = await buildHeadersFromConfig();
+
+    const resp = await fetch(endpoint, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ model: model, messages: [{ role: 'user', content: text }], stream: false })
+    });
+
+    const bodyText = await resp.text().catch(() => resp.statusText || '');
+    let parsed: any = undefined;
+    try { parsed = JSON.parse(bodyText); } catch (_) { parsed = undefined; }
+
+    if (resp.ok) {
+      const urls: string[] = [];
+      const id = parsed && parsed.id ? String(parsed.id) : undefined;
+      try {
+        const maybe = parsed || {};
+        for (const k of Object.keys(maybe)) {
+          const v = maybe[k];
+          if (typeof v === 'string' && (v.startsWith('http://') || v.startsWith('https://'))) urls.push(v);
+          if (Array.isArray(v)) {
+            for (const item of v) if (typeof item === 'string' && (item.startsWith('http://') || item.startsWith('https://'))) urls.push(item);
+          }
+        }
+      } catch (_) { }
+
+      if (urls.length > 0 || id || parsed) {
+        const actions: string[] = [];
+        if (urls.length > 0) actions.push('Open URL');
+        if (id) actions.push('Copy ID');
+        actions.push('Show Raw');
+
+        const pick = await vscode.window.showInformationMessage(`File sent — status ${resp.status}`, ...actions);
+        if (pick === 'Open URL' && urls.length > 0) {
+          const pickUrl = urls.length === 1 ? urls[0] : await vscode.window.showQuickPick(urls, { placeHolder: 'Select URL to open' });
+          if (pickUrl) await vscode.env.openExternal(vscode.Uri.parse(pickUrl));
+        } else if (pick === 'Copy ID' && id) {
+          await vscode.env.clipboard.writeText(String(id));
+          vscode.window.showInformationMessage('ID copied to clipboard');
+        } else if (pick === 'Show Raw') {
+          const doc = await vscode.workspace.openTextDocument({ content: JSON.stringify(parsed || bodyText, null, 2), language: 'json' });
+          await vscode.window.showTextDocument(doc, { preview: true });
+        }
+      }
+    }
+
+    return { ok: resp.ok, status: resp.status, text: bodyText, json: parsed };
+  } catch (e) {
+    LucidLogger.error('sendFileUri error', e);
+    return { ok: false, status: 0, text: String(e) };
+  }
+}
+
+async function buildPromptWithContext(prompt: string, attachedPaths: Set<string>): Promise<string> {
+  let combined = '';
+  if (attachedPaths.size > 0) {
+    for (const p of Array.from(attachedPaths)) {
+      try {
+        const uri = vscode.Uri.file(p);
+        const bytes = await vscode.workspace.fs.readFile(uri);
+        const text = Buffer.from(bytes).toString('utf8');
+        combined += `--- ATTACHED: ${p.split('/').pop()} ---\n${text}\n--- END ATTACHED ---\n\n`;
+      } catch (e) {
+        LucidLogger.error('Failed to read attached file ' + p, e);
+      }
+    }
+  } else {
+    try {
+      const ed = vscode.window.activeTextEditor;
+      if (ed && ed.document) {
+        const doc = ed.document;
+        const fileName = doc.fileName && doc.fileName.length ? path.basename(doc.fileName) : (doc.uri && doc.uri.path ? path.basename(doc.uri.path) : undefined);
+        const text = doc.getText();
+        combined += `--- ACTIVE EDITOR: ${fileName || 'untitled'} ---\n${text}\n--- END ACTIVE EDITOR ---\n\n`;
+      }
+    } catch (e) {
+      LucidLogger.debug('Failed to read active editor for fallback attached content', e);
+    }
+  }
+
+  return `${combined}\n${prompt}`;
+}
+
+function buildActionInstructionPrompt(promptWithContext: string, originalPrompt: string): string {
+  const rules = [
+    'You are Lucid, a VS Code automation agent. Produce ONE actionable plan per request.',
+    'Always return a JSON object describing the plan in a fenced ```json``` block with the shape {"command": string, "args": array, "type": "terminal"|"vscode"|"clipboard", "description": string, "text"?: string}.',
+    'If the action is a shell/terminal command, also include a fenced ```bash``` block containing ONLY the executable line so the UI can render it separately.',
+    'When editing files, prefer built-in VS Code commands such as editor.action.insertSnippet or workbench.action.files.save.',
+    'Never ask the user to run commands manually; provide the exact command and arguments yourself.'
+  ].join('\n\n');
+
+  return [
+    rules,
+    'If you need to reference workspace context or earlier instructions, incorporate them before producing the JSON block.',
+    'Be concise in any natural language explanation and place it after the structured outputs.',
+    'REQUEST CONTEXT:',
+    promptWithContext,
+    'USER PROMPT:',
+    originalPrompt
+  ].join('\n\n');
+}
+
+async function applySnippetToActiveEditor(snippet: string, mode: 'replace' | 'insert'): Promise<boolean> {
+  if (!snippet || !snippet.length) return false;
+  const editor = vscode.window.activeTextEditor;
+  if (!editor) {
+    vscode.window.showInformationMessage('Open a text editor to apply this snippet.');
+    return false;
+  }
+
+  const snippetString = new vscode.SnippetString(snippet);
+  try {
+    if (mode === 'replace') {
+      const targeted = editor.selections?.filter(sel => sel && !sel.isEmpty) || [];
+      if (targeted.length > 0) {
+        return await editor.insertSnippet(snippetString, targeted);
+      }
+      const start = new vscode.Position(0, 0);
+      const lastLine = Math.max(0, editor.document.lineCount - 1);
+      const end = editor.document.lineCount > 0
+        ? editor.document.lineAt(lastLine).range.end
+        : start;
+      const fullRange = new vscode.Range(start, end);
+      return await editor.insertSnippet(snippetString, fullRange);
+    }
+
+    const positions = editor.selections?.map(sel => sel?.active).filter(Boolean) || [];
+    if (positions.length === 1 && positions[0]) {
+      return await editor.insertSnippet(snippetString, positions[0]);
+    }
+    if (positions.length > 1) {
+      return await editor.insertSnippet(snippetString, positions);
+    }
+    return await editor.insertSnippet(snippetString);
+  } catch (err) {
+    LucidLogger.error('applySnippetToActiveEditor error', err);
+    vscode.window.showErrorMessage('Failed to apply snippet. Check logs for details.');
+    return false;
+  }
 }
 
 export function deactivate() { }
