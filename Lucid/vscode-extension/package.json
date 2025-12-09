@@ -3,7 +3,7 @@
   "publisher": "mASUm0813",
   "displayName": "Lucid (Ollama Integration)",
   "description": "Integrate local Ollama models into VS Code like as Copilot Chat",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "license": "MIT",
   "icon": "resources/lucid-icon.png",
   "keywords": [
@@ -32,6 +32,7 @@
     "Chat"
   ],
   "activationEvents": [
+    "onStartupFinished",
     "onView:lucid.chatView",
     "onCommand:lucid.sendFile",
     "onCommand:lucid.sendActiveFile",
@@ -120,6 +121,27 @@
           "type": "boolean",
           "default": true,
           "description": "Enable inline code completions (ghost text) in the editor"
+        },
+        "lucid.inlineCompletionTemperature": {
+          "type": "number",
+          "default": 0.2,
+          "minimum": 0,
+          "maximum": 2,
+          "description": "Sampling temperature used for inline completions (lower numbers are more deterministic)"
+        },
+        "lucid.inlineCompletionDebounceMs": {
+          "type": "number",
+          "default": 350,
+          "minimum": 0,
+          "maximum": 2000,
+          "description": "Minimum delay in milliseconds between inline completion requests"
+        },
+        "lucid.inlineCompletionMaxRemoteChars": {
+          "type": "number",
+          "default": 3500,
+          "minimum": 500,
+          "maximum": 10000,
+          "description": "Maximum combined prefix/suffix characters sent to Ollama for inline completions before falling back locally"
         },
         "lucid.ollamaExtraHeaders": {
           "type": "object",

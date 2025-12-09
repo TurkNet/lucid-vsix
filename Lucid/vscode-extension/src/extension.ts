@@ -29,6 +29,152 @@ interface OllamaGenerateResponse {
   done: boolean;
 }
 
+const INLINE_MAX_PREFIX_CHARS = 2000;
+const INLINE_MAX_SUFFIX_CHARS = 500;
+const INLINE_MAX_COMPLETION_CHARS = 400;
+const INLINE_CACHE_TTL_MS = 2000;
+
+interface InlineContext {
+  prompt: string;
+  prefix: string;
+  suffix: string;
+  language: string;
+  fileName: string;
+}
+
+let lastInlineRequestTimestamp = 0;
+let lastInlineCache: { key: string; completion: string; timestamp: number } | undefined;
+
+function describeLanguageDirective(languageId: string): string {
+  switch (languageId) {
+    case 'typescript':
+      return 'Prefer TypeScript syntax, keep imports minimal, and match existing semicolons.';
+    case 'javascript':
+      return 'Prefer modern JavaScript (ES2020) syntax and match the surrounding style.';
+    case 'python':
+      return 'Produce valid Python with correct indentation and avoid extra comments.';
+    case 'csharp':
+      return 'Emit idiomatic C# with braces aligned to the current style.';
+    case 'java':
+      return 'Emit Java code that compiles, following the existing brace/indent style.';
+    case 'go':
+      return 'Return Go code formatted like gofmt output. Avoid comments unless necessary.';
+    default:
+      return 'Return only the code that should appear next; do not explain the change.';
+  }
+}
+
+function buildInlineContext(document: vscode.TextDocument, position: vscode.Position): InlineContext | undefined {
+  try {
+    const fullText = document.getText();
+    const cursorOffset = document.offsetAt(position);
+    const prefix = fullText.slice(Math.max(0, cursorOffset - INLINE_MAX_PREFIX_CHARS), cursorOffset);
+    const suffix = fullText.slice(cursorOffset, cursorOffset + INLINE_MAX_SUFFIX_CHARS);
+    if (!prefix.trim() && !suffix.trim()) return undefined;
+    const language = document.languageId || 'plaintext';
+    const fileName = document.fileName ? path.basename(document.fileName) : 'untitled';
+    const codeBlock = `---\nPREFIX:\n${prefix}<CURSOR />\nSUFFIX:\n${suffix}\n---`;
+    const directive = describeLanguageDirective(language);
+    const prompt = [
+      'You are an inline code completion engine. Continue the code at the cursor.',
+      `Language: ${language}`,
+      `File: ${fileName}`,
+      directive,
+      'Respond with raw code that can be inserted at the caret without wrapping fences.',
+      codeBlock
+    ].join('\n');
+    return { prompt, prefix, suffix, language, fileName };
+  } catch (e) {
+    LucidLogger.debug('buildInlineContext failed', e);
+    return undefined;
+  }
+}
+
+function buildLocalFallbackCompletion(document: vscode.TextDocument, position: vscode.Position): string | undefined {
+  try {
+    const currentLine = document.lineAt(position.line).text;
+    const indentMatch = currentLine.match(/^\s*/);
+    const indent = indentMatch ? indentMatch[0] : '';
+    const previousLine = position.line > 0 ? document.lineAt(position.line - 1).text.trimEnd() : '';
+    if (!currentLine.trim()) {
+      if (previousLine.trim().endsWith('{')) {
+        return `\n${indent}  \n${indent}}`;
+      }
+      if (previousLine.trim().endsWith('(')) {
+        return ')';
+      }
+    }
+    if (currentLine.trim().startsWith('// TODO')) {
+      return `${indent}// TODO: describe here`;
+    }
+    return undefined;
+  } catch (e) {
+    LucidLogger.debug('buildLocalFallbackCompletion error', e);
+    return undefined;
+  }
+}
+
+function sanitizeModelCompletion(raw: string | undefined): string | undefined {
+  if (!raw) return undefined;
+  let text = raw.replace(/\r/g, '');
+  const fenced = text.match(/```[a-zA-Z0-9-]*\s*([\s\S]*?)```/);
+  if (fenced && fenced[1]) {
+    text = fenced[1];
+  }
+  text = text.replace(/^(?:Sure,?\s+|Here(?:'s| is)\s+|Let(?:'s| us)\s+)/i, '');
+  text = text.replace(/<\/?>CURSOR>/gi, '');
+  text = text.replace(/^[\s\n]+/, '');
+  if (!text.trim()) return undefined;
+  return text;
+}
+
+async function requestInlineCompletionFromOllama(prompt: string, signal?: AbortSignal): Promise<string | undefined> {
+  const endpoint = LucidConfig.getEndpoint();
+  const model = LucidConfig.getModelName();
+  const headers = await buildHeadersFromConfig();
+  const temperatureSetting = LucidConfig.getInlineCompletionTemperature();
+  const safeTemperature = Number.isFinite(temperatureSetting) ? Math.min(Math.max(temperatureSetting, 0), 2) : 0.2;
+  try {
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers,
+      signal,
+      body: JSON.stringify({
+        model,
+        messages: [{ role: 'user', content: prompt }],
+        stream: false,
+        temperature: safeTemperature
+      })
+    });
+    const text = await response.text().catch(() => response.statusText || '');
+    if (!response.ok) {
+      throw new Error(`Inline completion request failed: ${response.status} ${text}`);
+    }
+    try {
+      const parsed = JSON.parse(text);
+      if (typeof parsed === 'string') return parsed;
+      if (parsed.response && typeof parsed.response === 'string') return parsed.response;
+      if (parsed.message?.content) return parsed.message.content;
+      if (Array.isArray(parsed.choices)) {
+        for (const choice of parsed.choices) {
+          const content = choice?.message?.content || choice?.text || choice?.response;
+          if (content) return content;
+        }
+      }
+    } catch (_) {
+      return text;
+    }
+    return text;
+  } catch (error) {
+    if ((error as any)?.name === 'AbortError') {
+      LucidLogger.debug('Inline completion request aborted');
+      return undefined;
+    }
+    LucidLogger.error('requestInlineCompletionFromOllama error', error);
+    return undefined;
+  }
+}
+
 function getNonce(): string {
   const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
   let nonce = '';
@@ -457,6 +603,73 @@ async function sendFileUri(uri: vscode.Uri): Promise<{ ok: boolean; status: numb
     context.subscriptions.push(vscode.workspace.onDidSaveTextDocument(() => postEditorName()));
   } catch (e) {
     LucidLogger.error('Failed to register WebviewViewProvider for lucid.chatView', e);
+  }
+
+  try {
+    const selector: vscode.DocumentSelector = [
+      { scheme: 'file' },
+      { scheme: 'untitled' }
+    ];
+    const inlineProvider: vscode.InlineCompletionItemProvider = {
+      provideInlineCompletionItems: async (document, position, _context, token) => {
+        if (!LucidConfig.isInlineCompletionEnabled()) return;
+        const inlineContext = buildInlineContext(document, position);
+        if (!inlineContext) return;
+
+        const debounceMs = Math.max(0, LucidConfig.getInlineCompletionDebounceMs());
+        const maxRemoteContext = Math.max(500, LucidConfig.getInlineCompletionMaxRemoteChars());
+        const totalContext = inlineContext.prefix.length + inlineContext.suffix.length;
+        const requestKey = `${document.uri.toString()}:${document.version}:${position.line}:${position.character}:${inlineContext.prefix.slice(-120)}:${inlineContext.suffix.slice(0, 80)}`;
+        const now = Date.now();
+
+        if (lastInlineCache && lastInlineCache.key === requestKey && now - lastInlineCache.timestamp < INLINE_CACHE_TTL_MS) {
+          const cachedText = lastInlineCache.completion;
+          return new vscode.InlineCompletionList([
+            new vscode.InlineCompletionItem(cachedText, new vscode.Range(position, position))
+          ]);
+        }
+
+        if (now - lastInlineRequestTimestamp < debounceMs) {
+          return undefined;
+        }
+
+        let completion: string | undefined;
+        const allowRemote = totalContext <= maxRemoteContext;
+        if (allowRemote) {
+          const abortController = new AbortController();
+          const tokenSubscription = token.onCancellationRequested(() => abortController.abort());
+          try {
+            const raw = await requestInlineCompletionFromOllama(inlineContext.prompt, abortController.signal);
+            completion = sanitizeModelCompletion(raw);
+          } catch (err) {
+            LucidLogger.debug('Inline completion provider failed, falling back', err);
+          } finally {
+            tokenSubscription.dispose();
+            lastInlineRequestTimestamp = Date.now();
+          }
+        }
+
+        if (!completion) {
+          completion = buildLocalFallbackCompletion(document, position);
+        }
+        if (!completion) return;
+
+        let sanitized = completion.replace(/\r/g, '');
+        if (!sanitized.trim()) return;
+        if (sanitized.length > INLINE_MAX_COMPLETION_CHARS) {
+          sanitized = sanitized.slice(0, INLINE_MAX_COMPLETION_CHARS);
+        }
+
+        lastInlineCache = { key: requestKey, completion: sanitized, timestamp: Date.now() };
+
+        return new vscode.InlineCompletionList([
+          new vscode.InlineCompletionItem(sanitized, new vscode.Range(position, position))
+        ]);
+      }
+    };
+    context.subscriptions.push(vscode.languages.registerInlineCompletionItemProvider(selector, inlineProvider));
+  } catch (inlineErr) {
+    LucidLogger.error('Failed to register inline completion provider', inlineErr);
   }
 
   // Diagnostic helper: reveal the Lucid activity bar container and instruct user

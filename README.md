@@ -28,6 +28,9 @@ npm run compile
   "lucid.ollamaApiKey": "llm-...",
   "lucid.ollamaExtraHeaders": { "X-Request-Source": "post_text_script" },
   "lucid.enableInlineCompletion": true,
+  "lucid.inlineCompletionTemperature": 0.2,
+  "lucid.inlineCompletionDebounceMs": 350,
+  "lucid.inlineCompletionMaxRemoteChars": 3500,
   "lucid.logUnmaskedHeaders": false,
   "lucid.enableStreamingStatus": false,
   "lucid.ollamaApiKeyHeaderName": ""
@@ -57,6 +60,15 @@ Below are the primary configuration options you can set in VS Code's Settings (`
 
 - `lucid.enableInlineCompletion` (boolean) — Default: `true`
   - Description: Enable inline (ghost text) code completions within the editor. When enabled, the extension may present inline suggestions drawn from the configured Ollama model.
+
+- `lucid.inlineCompletionTemperature` (number) — Default: `0.2`
+  - Description: Sampling temperature for inline completions. Lower values are more deterministic, higher values produce more diverse suggestions (range `0-2`).
+
+- `lucid.inlineCompletionDebounceMs` (number) — Default: `350`
+  - Description: Minimum delay (in milliseconds) between remote inline completion requests. Increase this if Ollama cannot keep up with keystrokes.
+
+- `lucid.inlineCompletionMaxRemoteChars` (number) — Default: `3500`
+  - Description: Maximum combined prefix + suffix characters that will be sent to Ollama for generating inline completions. Larger files will fall back to the lightweight local heuristic to avoid latency.
 
 - `lucid.logUnmaskedHeaders` (boolean) — Default: `false`
   - Description: When `true`, sensitive headers such as the API key will be logged in full within the extension logs. This is useful for debugging but should be disabled in production environments.
