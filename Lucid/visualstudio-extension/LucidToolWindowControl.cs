@@ -69,7 +69,7 @@ namespace Lucid.VisualStudioExtension
 
                 if (string.IsNullOrWhiteSpace(templatePath)) return "<body><pre>Lucid UI template not found.</pre></body>";
 
-                var raw = await File.ReadAllTextAsync(templatePath, Encoding.UTF8);
+                var raw = File.ReadAllText(templatePath, Encoding.UTF8);
                 var nonce = Guid.NewGuid().ToString("N");
                 // WebView2 does not enforce the CSP placeholders; keep it simple.
                 return raw.Replace("__NONCE__", nonce).Replace("__CSP_META__", string.Empty);
@@ -224,7 +224,7 @@ namespace Lucid.VisualStudioExtension
                 {
                     try
                     {
-                        var text = await File.ReadAllTextAsync(path);
+                        var text = File.ReadAllText(path);
                         var name = Path.GetFileName(path);
                         sb.AppendLine($"--- ATTACHED: {name} ---");
                         sb.AppendLine(text);
