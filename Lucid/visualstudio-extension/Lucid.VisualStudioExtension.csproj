@@ -12,6 +12,7 @@
     <VsixType>VSPackage</VsixType>
     <UseCodeBase>true</UseCodeBase>
     <LangVersion>latest</LangVersion>
+    <UseWPF>true</UseWPF>
   </PropertyGroup>
 
   <ItemGroup>
