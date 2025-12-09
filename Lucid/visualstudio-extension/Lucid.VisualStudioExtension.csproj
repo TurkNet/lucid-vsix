@@ -41,4 +41,6 @@
     <Message Importance="high" Text="Creating VSIX package..." />
     <CallTarget Targets="CreateVsixContainer" />
   </Target>
+
+  <Import Project="$(VSToolsPath)\VSSDK\Microsoft.VsSDK.targets" Condition="Exists('$(VSToolsPath)\VSSDK\Microsoft.VsSDK.targets')" />
 </Project>
