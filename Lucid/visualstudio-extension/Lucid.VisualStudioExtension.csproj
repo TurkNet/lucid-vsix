@@ -15,6 +15,8 @@
     <LangVersion>latest</LangVersion>
     <UseWPF>true</UseWPF>
     <GenerateVsixPackageOnBuild>true</GenerateVsixPackageOnBuild>
+    <VsixManifest>source.extension.vsixmanifest</VsixManifest>
+    <VsixOutputPath>$(OutputPath)</VsixOutputPath>
   </PropertyGroup>
 
   <ItemGroup>
@@ -28,6 +30,7 @@
       <SubType>Designer</SubType>
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </None>
+    <VsixManifest Include="source.extension.vsixmanifest" />
     <Content Include="..\common\html\ui.html">
       <Link>common\html\ui.html</Link>
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
