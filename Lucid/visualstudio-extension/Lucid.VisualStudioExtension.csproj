@@ -21,12 +21,6 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Compile Include="LucidVsPackage.cs" />
-    <Compile Include="LucidToolWindow.cs" />
-    <Compile Include="LucidToolWindowControl.cs" />
-  </ItemGroup>
-
-  <ItemGroup>
     <None Include="source.extension.vsixmanifest">
       <SubType>Designer</SubType>
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
