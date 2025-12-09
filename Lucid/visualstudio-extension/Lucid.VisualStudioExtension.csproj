@@ -3,6 +3,7 @@
     <TargetFramework>net472</TargetFramework>
     <RootNamespace>Lucid.VisualStudioExtension</RootNamespace>
     <AssemblyName>Lucid.VisualStudioExtension</AssemblyName>
+    <OutputPath>bin\$(Configuration)\</OutputPath>
     <GeneratePkgDefFile>true</GeneratePkgDefFile>
     <IncludeAssemblyInVSIXContainer>true</IncludeAssemblyInVSIXContainer>
     <IncludeDebugSymbolsInVSIXContainer>false</IncludeDebugSymbolsInVSIXContainer>
@@ -13,6 +14,7 @@
     <UseCodeBase>true</UseCodeBase>
     <LangVersion>latest</LangVersion>
     <UseWPF>true</UseWPF>
+    <GenerateVsixPackageOnBuild>true</GenerateVsixPackageOnBuild>
   </PropertyGroup>
 
   <ItemGroup>
