@@ -5,7 +5,7 @@
     <AssemblyName>Lucid.VisualStudioExtension</AssemblyName>
     <OutDir>$(MSBuildProjectDirectory)\bin\$(Configuration)\</OutDir>
     <OutputPath>$(OutDir)</OutputPath>
-    <IntermediateOutputPath>$(MSBuildProjectDirectory)\obj\$(Configuration)\</IntermediateOutputPath>
+    <IntermediateOutputPath>$(MSBuildProjectDirectory)\obj\$(Configuration)\$(TargetFramework)\</IntermediateOutputPath>
     <GeneratePkgDefFile>true</GeneratePkgDefFile>
     <IncludeAssemblyInVSIXContainer>true</IncludeAssemblyInVSIXContainer>
     <IncludeDebugSymbolsInVSIXContainer>false</IncludeDebugSymbolsInVSIXContainer>
