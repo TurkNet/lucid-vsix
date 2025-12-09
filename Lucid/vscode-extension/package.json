@@ -3,7 +3,7 @@
   "publisher": "mASUm0813",
   "displayName": "Lucid (Ollama Integration)",
   "description": "Integrate local Ollama models into VS Code like as Copilot Chat",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "license": "MIT",
   "icon": "resources/lucid-icon.png",
   "keywords": [
@@ -90,7 +90,7 @@
         {
           "id": "lucid",
           "title": "Lucid",
-          "icon": "resources/lucid-icon.svg"
+          "icon": "resources/lucid-icon.png"
         }
       ]
     },

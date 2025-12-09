@@ -1,8 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <PackageManifest Version="2.0.0" xmlns="http://schemas.microsoft.com/developer/vsx-schema/2011">
   <Metadata>
-    <Identity Id="Lucid.VisualStudioExtension" Version="1.0.0" Publisher="YourName" />
-    <DisplayName>Lucid</DisplayName>
-    <Description>Lucid Visual Studio extension (stub)</Description>
+    <Identity Id="Lucid.VisualStudioExtension" Version="1.0.0" Publisher="Lucid" />
+    <DisplayName>Lucid (Ollama)</DisplayName>
+    <Description>Chat with your local Ollama models inside Visual Studio.</Description>
   </Metadata>
+  <Assets>
+    <Asset Type="Microsoft.VisualStudio.VsPackage" Path="|%CurrentProject%;PkgdefProjectOutputGroup|" />
+  </Assets>
 </PackageManifest>
