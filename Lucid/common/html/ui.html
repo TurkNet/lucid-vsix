@@ -204,6 +204,233 @@
       flex-direction: column;
       gap: 8px;
     }
+    .action-output {
+      margin-top: 10px;
+      border-radius: 10px;
+      border: 1px solid rgba(255,255,255,0.08);
+      background: linear-gradient(135deg, rgba(20,20,20,0.95), rgba(15,28,46,0.85));
+      overflow: hidden;
+      transition: border-color 0.2s ease, box-shadow 0.2s ease;
+    }
+    .action-output.success {
+      border-color: rgba(63, 207, 142, 0.5);
+      box-shadow: 0 0 0 1px rgba(63, 207, 142, 0.15);
+    }
+    .action-output.error {
+      border-color: rgba(255, 105, 97, 0.5);
+      box-shadow: 0 0 0 1px rgba(255, 105, 97, 0.12);
+    }
+    .action-output-toggle {
+      width: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 12px;
+      background: transparent;
+      border: none;
+      color: inherit;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .action-output-heading {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      flex: 1;
+      min-width: 0;
+      text-align: left;
+    }
+    .action-output-toggle:focus-visible {
+      outline: 1px solid var(--vscode-focusBorder, rgba(255,255,255,0.5));
+      outline-offset: -3px;
+    }
+    .action-output-title {
+      font-size: 12px;
+      letter-spacing: 0.02em;
+      text-transform: uppercase;
+    }
+    .action-output-command {
+      display: block;
+      font-size: 11px;
+      color: rgba(255,255,255,0.8);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      width: 100%;
+    }
+    .action-output-status {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .action-output-status.error {
+      color: var(--vscode-errorForeground);
+    }
+    .action-output-status.ok {
+      color: var(--vscode-testing-iconPassed, #3fcf8e);
+    }
+    .action-output-icon {
+      display: inline-flex;
+      transform: rotate(0deg);
+      transition: transform 0.2s ease;
+    }
+    .action-output.open .action-output-icon {
+      transform: rotate(90deg);
+    }
+    .action-output-body {
+      border-top: 1px solid rgba(255,255,255,0.08);
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .action-output-body[hidden] {
+      display: none;
+    }
+    .action-output-meta {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 8px;
+      font-size: 11px;
+      color: var(--vscode-descriptionForeground);
+    }
+    .action-output-meta strong {
+      display: block;
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 2px;
+    }
+    .action-output-section {
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 8px;
+      background: rgba(0,0,0,0.25);
+      overflow: hidden;
+    }
+    .action-output-section-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 6px 10px;
+      font-size: 11px;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      border-bottom: 1px solid rgba(255,255,255,0.08);
+    }
+    .action-output-section-header button {
+      font-size: 10px;
+      padding: 4px 8px;
+    }
+    .action-output-section pre {
+      margin: 0;
+      padding: 10px;
+      max-height: 240px;
+      overflow-y: auto;
+      font-size: 12px;
+      white-space: pre-wrap;
+    }
+    .action-output-suggestions {
+      border: 1px dashed rgba(255,255,255,0.2);
+      border-radius: 8px;
+      padding: 10px 12px;
+    }
+    .action-output-suggestions strong {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      display: block;
+      margin-bottom: 4px;
+    }
+    .action-output-suggestions ul {
+      margin: 0;
+      padding-left: 16px;
+      font-size: 12px;
+    }
+    .action-output-empty {
+      font-size: 12px;
+      color: var(--vscode-descriptionForeground);
+      opacity: 0.9;
+    }
+    .todo-card {
+      margin-top: 12px;
+      border-radius: 10px;
+      border: 1px solid rgba(255,255,255,0.07);
+      background: rgba(12,18,28,0.85);
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .todo-card-header {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .todo-card-title {
+      font-size: 12px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+    .todo-card-desc {
+      font-size: 12px;
+      color: var(--vscode-descriptionForeground);
+    }
+    .todo-list {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .todo-item {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      padding: 10px;
+      border-radius: 8px;
+      background: rgba(255,255,255,0.02);
+      border: 1px solid rgba(255,255,255,0.05);
+    }
+    .todo-item-main {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+    }
+    .todo-item-index {
+      font-size: 11px;
+      opacity: 0.7;
+    }
+    .todo-item-title {
+      font-size: 13px;
+      font-weight: 600;
+    }
+    .todo-item-detail {
+      font-size: 12px;
+      color: var(--vscode-descriptionForeground);
+      margin-left: 26px;
+      margin-top: 4px;
+    }
+    .todo-item-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+    }
+    .todo-item-snippet {
+      margin: 0;
+      padding: 6px 8px;
+      background: rgba(0,0,0,0.35);
+      border-radius: 6px;
+      font-size: 12px;
+      white-space: pre-wrap;
+      flex: 1;
+      min-width: 160px;
+    }
+    .todo-item button {
+      align-self: flex-start;
+    }
     .action-preview-header {
       display: flex;
       align-items: center;
@@ -374,7 +601,7 @@
         </div>
         <select id="modeSelect" class="mode-select" aria-label="Send mode">
           <option value="ask">Ask</option>
-          <option value="action">Action</option>
+          <option value="agent">Agent</option>
         </select>
         <button id="send" type="button" class="primary" aria-label="Send prompt">
           <svg class="icon-plane" viewBox="0 0 24 24" role="presentation" focusable="false">
@@ -704,6 +931,290 @@
 
         return card;
       }
+
+        function createActionOutput(actionResult, defaultOpen) {
+          try {
+            if (!actionResult) return null;
+            var container = document.createElement('div');
+            container.className = 'action-output';
+            container.classList.add(actionResult.success === false ? 'error' : 'success');
+
+            var commandLine = buildCommandLine(actionResult);
+
+            var toggle = document.createElement('button');
+            toggle.type = 'button';
+            toggle.className = 'action-output-toggle';
+            toggle.setAttribute('aria-expanded', 'false');
+
+            var heading = document.createElement('div');
+            heading.className = 'action-output-heading';
+            var title = document.createElement('span');
+            title.className = 'action-output-title';
+            title.textContent = 'Terminal';
+            heading.appendChild(title);
+
+            var commandLabel = document.createElement('span');
+            commandLabel.className = 'action-output-command';
+            var commandText = commandLine.length ? commandLine : (actionResult.title || '');
+            commandLabel.textContent = commandText || '—';
+            if (commandText) commandLabel.title = commandText;
+            heading.appendChild(commandLabel);
+            toggle.appendChild(heading);
+
+            var status = document.createElement('span');
+            status.className = 'action-output-status ' + (actionResult.success === false ? 'error' : 'ok');
+            status.textContent = actionResult.success === false ? 'Failed' : 'Completed';
+            toggle.appendChild(status);
+
+            var icon = document.createElement('span');
+            icon.className = 'action-output-icon';
+            icon.innerHTML = '&#9656;';
+            toggle.appendChild(icon);
+
+            var body = document.createElement('div');
+            body.className = 'action-output-body';
+            var startOpen = !!defaultOpen;
+            body.hidden = !startOpen;
+
+            toggle.addEventListener('click', function () {
+              var expanded = body.hidden === false;
+              if (expanded) {
+                body.hidden = true;
+                container.classList.remove('open');
+                toggle.setAttribute('aria-expanded', 'false');
+              } else {
+                body.hidden = false;
+                container.classList.add('open');
+                toggle.setAttribute('aria-expanded', 'true');
+              }
+            });
+
+            container.appendChild(toggle);
+            container.appendChild(body);
+            toggle.setAttribute('aria-expanded', startOpen ? 'true' : 'false');
+            if (startOpen) {
+              container.classList.add('open');
+            }
+
+            var meta = document.createElement('div');
+            meta.className = 'action-output-meta';
+            if (commandLine.length) meta.appendChild(createMetaEntry('Command', commandLine));
+            if (actionResult.cwd) meta.appendChild(createMetaEntry('Working dir', actionResult.cwd));
+            if (typeof actionResult.exitCode !== 'undefined') meta.appendChild(createMetaEntry('Exit code', String(actionResult.exitCode)));
+            if (meta.children.length) body.appendChild(meta);
+
+            var hasStdout = typeof actionResult.stdout === 'string' && actionResult.stdout.trim().length > 0;
+            var hasStderr = typeof actionResult.stderr === 'string' && actionResult.stderr.trim().length > 0;
+            var stdoutSection = createActionOutputSection('stdout', actionResult.stdout || '');
+            var stderrSection = createActionOutputSection('stderr', actionResult.stderr || '');
+            if (hasStdout && stdoutSection) body.appendChild(stdoutSection);
+            if (hasStderr && stderrSection) body.appendChild(stderrSection);
+            if (!hasStdout && !hasStderr) {
+              var empty = document.createElement('div');
+              empty.className = 'action-output-empty';
+              empty.textContent = 'No output captured for this command.';
+              body.appendChild(empty);
+            }
+
+            if (Array.isArray(actionResult.suggestions) && actionResult.suggestions.length > 0) {
+              var suggestionBlock = document.createElement('div');
+              suggestionBlock.className = 'action-output-suggestions';
+              var titleEl = document.createElement('strong');
+              titleEl.textContent = 'Next steps';
+              suggestionBlock.appendChild(titleEl);
+              var list = document.createElement('ul');
+              for (var i = 0; i < actionResult.suggestions.length; i++) {
+                var item = document.createElement('li');
+                item.textContent = actionResult.suggestions[i];
+                list.appendChild(item);
+              }
+              suggestionBlock.appendChild(list);
+              body.appendChild(suggestionBlock);
+            }
+
+            return container;
+          } catch (e) {
+            console.error(e);
+            return null;
+          }
+        }
+
+        function estimateActionOutputLength(result) {
+          if (!result) return 0;
+          var total = 0;
+          var textFields = ['command', 'cwd', 'stdout', 'stderr'];
+          for (var i = 0; i < textFields.length; i++) {
+            var key = textFields[i];
+            if (result[key] && typeof result[key] === 'string') {
+              total += result[key].length;
+            }
+          }
+          if (Array.isArray(result.args) && result.args.length) {
+            total += result.args.join(' ').length;
+          }
+          if (typeof result.exitCode !== 'undefined') {
+            total += String(result.exitCode).length;
+          }
+          if (Array.isArray(result.suggestions) && result.suggestions.length) {
+            total += result.suggestions.join(' ').length;
+          }
+          return total;
+        }
+
+        function buildCommandLine(result) {
+          var parts = [];
+          if (result.command) parts.push(result.command);
+          if (Array.isArray(result.args)) {
+            for (var i = 0; i < result.args.length; i++) {
+              if (typeof result.args[i] === 'string') {
+                parts.push(result.args[i]);
+              }
+            }
+          }
+          return parts.join(' ').trim();
+        }
+
+        function createMetaEntry(label, value) {
+          var entry = document.createElement('div');
+          var heading = document.createElement('strong');
+          heading.textContent = label;
+          entry.appendChild(heading);
+          var text = document.createElement('div');
+          text.textContent = value;
+          entry.appendChild(text);
+          return entry;
+        }
+
+        function createActionOutputSection(label, content) {
+          if (!content || !content.trim()) return null;
+          var section = document.createElement('div');
+          section.className = 'action-output-section';
+          var header = document.createElement('div');
+          header.className = 'action-output-section-header';
+          header.textContent = label.toUpperCase();
+          var copyBtn = document.createElement('button');
+          copyBtn.type = 'button';
+          copyBtn.textContent = 'Copy';
+          copyBtn.addEventListener('click', function (ev) {
+            ev.stopPropagation();
+            copyPlainText(content, label.toUpperCase() + ' copied');
+          });
+          header.appendChild(copyBtn);
+          section.appendChild(header);
+          var pre = document.createElement('pre');
+          pre.textContent = content;
+          section.appendChild(pre);
+          return section;
+        }
+
+        function createTodoList(todo) {
+          try {
+            if (!todo || !Array.isArray(todo.items) || todo.items.length === 0) return null;
+            var card = document.createElement('div');
+            card.className = 'todo-card';
+
+            var header = document.createElement('div');
+            header.className = 'todo-card-header';
+            var title = document.createElement('div');
+            title.className = 'todo-card-title';
+            title.textContent = todo.title || 'Önerilen adımlar';
+            header.appendChild(title);
+            if (todo.description) {
+              var desc = document.createElement('div');
+              desc.className = 'todo-card-desc';
+              desc.textContent = todo.description;
+              header.appendChild(desc);
+            }
+            card.appendChild(header);
+
+            var list = document.createElement('ol');
+            list.className = 'todo-list';
+            for (var i = 0; i < todo.items.length; i++) {
+              var item = todo.items[i];
+              var row = document.createElement('li');
+              row.className = 'todo-item';
+
+              var main = document.createElement('div');
+              main.className = 'todo-item-main';
+              var index = document.createElement('div');
+              index.className = 'todo-item-index';
+              index.textContent = (i + 1) + '.';
+              main.appendChild(index);
+
+              var checkbox = document.createElement('input');
+              checkbox.type = 'checkbox';
+              checkbox.className = 'todo-item-check';
+              var checkboxId = (item.id || ('todo-' + Date.now() + '-' + i));
+              checkbox.id = checkboxId;
+              main.appendChild(checkbox);
+
+              var label = document.createElement('label');
+              label.setAttribute('for', checkboxId);
+              label.className = 'todo-item-title';
+              label.textContent = item.title || 'Adım ' + (i + 1);
+              main.appendChild(label);
+              row.appendChild(main);
+
+              if (item.detail) {
+                var detail = document.createElement('div');
+                detail.className = 'todo-item-detail';
+                detail.textContent = item.detail;
+                row.appendChild(detail);
+              }
+
+              var actions = document.createElement('div');
+              actions.className = 'todo-item-actions';
+              if (item.snippet) {
+                var snippet = document.createElement('pre');
+                snippet.className = 'todo-item-snippet';
+                snippet.textContent = item.snippet;
+                actions.appendChild(snippet);
+              }
+              if (item.actionId) {
+                var runBtn = document.createElement('button');
+                runBtn.type = 'button';
+                runBtn.textContent = 'Çalıştır';
+                runBtn.addEventListener('click', (function (actionId, btn) {
+                  return function () {
+                    try {
+                      btn.disabled = true;
+                      btn.textContent = 'Gönderildi';
+                      HostBridge.postMessage({ type: 'actionRun', actionId: actionId });
+                      setTimeout(function () {
+                        btn.disabled = false;
+                        btn.textContent = 'Tekrar Çalıştır';
+                      }, 6000);
+                    } catch (err) { console.error(err); }
+                  };
+                })(item.actionId, runBtn));
+                actions.appendChild(runBtn);
+              }
+              if (actions.children.length) {
+                row.appendChild(actions);
+              }
+              list.appendChild(row);
+            }
+            card.appendChild(list);
+            return card;
+          } catch (e) {
+            console.error(e);
+            return null;
+          }
+        }
+
+        function estimateTodoListLength(todo) {
+          if (!todo || !Array.isArray(todo.items)) return 0;
+          var total = 0;
+          if (todo.title) total += todo.title.length;
+          if (todo.description) total += todo.description.length;
+          for (var i = 0; i < todo.items.length; i++) {
+            var item = todo.items[i];
+            if (item.title) total += item.title.length;
+            if (item.detail) total += item.detail.length;
+            if (item.snippet) total += item.snippet.length;
+          }
+          return total;
+        }
 
       // File list render + interaction
       var currentFiles = [];
@@ -1056,6 +1567,12 @@
         }
       }
 
+      function normalizeSendMode(mode) {
+        var value = (mode || '').toLowerCase();
+        if (value === 'agent') return 'agent';
+        return 'ask';
+      }
+
       function appendBlock(text, role, options) {
         if (role === void 0) role = 'assistant';
         var safeText = text || '';
@@ -1094,19 +1611,42 @@
           label.textContent = labelForRole(role);
           block.appendChild(label);
 
-          var bodyEl = document.createElement('div');
-          bodyEl.className = 'message-body';
-          bodyEl.innerHTML = renderMarkdown(safeText);
+          var previewBlock = null;
+          var outputBlock = null;
+          var outputLength = 0;
+          var todoBlock = null;
+          var todoLength = 0;
+
           try {
             if (options && options.actionPreview) {
-              var previewBlock = createActionPreview(options.actionPreview);
-              if (previewBlock) {
-                block.classList.add('message-action');
-                bodyEl.appendChild(previewBlock);
+              previewBlock = createActionPreview(options.actionPreview);
+            }
+            if (options && options.actionOutput) {
+              outputBlock = createActionOutput(options.actionOutput, true);
+              if (outputBlock) {
+                outputLength = estimateActionOutputLength(options.actionOutput) || outputBlock.textContent.length;
+              }
+            }
+            if (options && options.todoList) {
+              todoBlock = createTodoList(options.todoList);
+              if (todoBlock) {
+                todoLength = estimateTodoListLength(options.todoList) || todoBlock.textContent.length;
               }
             }
           } catch (e) { console.error(e); }
-          block.appendChild(bodyEl);
+
+          var shouldRenderMessage = (safeText && safeText.length > 0) || !!previewBlock;
+          var bodyEl = null;
+          if (shouldRenderMessage) {
+            bodyEl = document.createElement('div');
+            bodyEl.className = 'message-body';
+            bodyEl.innerHTML = renderMarkdown(safeText);
+            if (previewBlock) {
+              block.classList.add('message-action');
+              bodyEl.appendChild(previewBlock);
+            }
+            block.appendChild(bodyEl);
+          }
 
           // Add Replay / Copy buttons as a sibling element (outside the bubble)
           try {
@@ -1127,7 +1667,7 @@
                   replayBtn.onclick = function () {
                     try {
                       var raw = block.dataset.rawText || safeText || '';
-                      var originalMode = block.dataset.sendMode || 'ask';
+                      var originalMode = normalizeSendMode(block.dataset.sendMode || 'ask');
                       HostBridge.postMessage({ type: 'replay', prompt: raw, mode: originalMode });
                     } catch (e) { console.error(e); }
                   };
@@ -1188,33 +1728,54 @@
             }
           } catch (e) { /* ignore action wiring errors */ }
 
-          block.dataset.rawText = safeText;
-          if (options && options.sendMode) {
-            block.dataset.sendMode = options.sendMode;
-          } else if (!block.dataset.sendMode) {
-            block.dataset.sendMode = 'ask';
+          var appended = false;
+          if (shouldRenderMessage) {
+            block.dataset.rawText = safeText;
+            if (options && options.sendMode) {
+              block.dataset.sendMode = normalizeSendMode(options.sendMode);
+            } else if (!block.dataset.sendMode) {
+              block.dataset.sendMode = 'ask';
+            }
+            block.dataset.textLength = String(safeText.length);
+            messages.appendChild(block);
+            appended = true;
+            // If an actions sibling factory was attached, create and append the sibling
+            try {
+              if (typeof block._createActionsSibling === 'function') {
+                var sibling = block._createActionsSibling();
+                if (sibling) messages.appendChild(sibling);
+              }
+            } catch (e) { /* ignore sibling append errors */ }
+            // Append a thin separator after assistant messages only
+            try {
+              if (role === 'assistant') {
+                var sepAfter = document.createElement('div');
+                sepAfter.className = 'message-separator';
+                sepAfter.setAttribute('aria-hidden', 'true');
+                messages.appendChild(sepAfter);
+              }
+            } catch (e) { }
+            state.totalChars += safeText.length;
           }
-          block.dataset.textLength = String(safeText.length);
-          messages.appendChild(block);
-          // If an actions sibling factory was attached, create and append the sibling
-          try {
-            if (typeof block._createActionsSibling === 'function') {
-              var sibling = block._createActionsSibling();
-              if (sibling) messages.appendChild(sibling);
-            }
-          } catch (e) { /* ignore sibling append errors */ }
-          // Append a thin separator after assistant messages only
-          try {
-            if (role === 'assistant') {
-              var sepAfter = document.createElement('div');
-              sepAfter.className = 'message-separator';
-              sepAfter.setAttribute('aria-hidden', 'true');
-              messages.appendChild(sepAfter);
-            }
-          } catch (e) { }
-          state.totalChars += safeText.length;
-          trimOverflow();
-          messages.scrollTop = messages.scrollHeight;
+
+          if (outputBlock) {
+            outputBlock.dataset.textLength = String(outputLength);
+            messages.appendChild(outputBlock);
+            state.totalChars += outputLength;
+            appended = true;
+          }
+
+          if (todoBlock) {
+            todoBlock.dataset.textLength = String(todoLength);
+            messages.appendChild(todoBlock);
+            state.totalChars += todoLength;
+            appended = true;
+          }
+
+          if (appended) {
+            trimOverflow();
+            messages.scrollTop = messages.scrollHeight;
+          }
         });
       }
 
@@ -1268,12 +1829,11 @@
 
       function getSendMode() {
         if (!modeSelect) return 'ask';
-        var value = (modeSelect.value || '').toLowerCase();
-        return value === 'action' ? 'action' : 'ask';
+        return normalizeSendMode(modeSelect.value);
       }
 
       function applyModePreference(mode) {
-        var preferred = mode === 'action' ? 'action' : 'ask';
+        var preferred = normalizeSendMode(mode);
         if (modeSelect && modeSelect.value !== preferred) {
           modeSelect.value = preferred;
         }

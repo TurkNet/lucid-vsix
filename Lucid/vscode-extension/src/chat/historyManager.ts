@@ -3,7 +3,7 @@ import * as crypto from 'crypto';
 import { LucidLogger } from '../../../common/log/logger';
 
 export type HistoryRole = 'user' | 'assistant' | 'system' | 'error';
-export type HistoryMode = 'ask' | 'action' | undefined;
+export type HistoryMode = 'ask' | 'agent' | undefined;
 
 export interface StoredActionPreview {
   snippet: string;
@@ -15,12 +15,25 @@ export interface StoredActionPreview {
   actionType?: 'vscode' | 'terminal' | 'clipboard';
 }
 
+export interface StoredActionResult {
+  title?: string;
+  command?: string;
+  args?: string[];
+  cwd?: string;
+  stdout?: string;
+  stderr?: string;
+  exitCode?: number;
+  success?: boolean;
+  suggestions?: string[];
+}
+
 export interface HistoryEntry {
   role: HistoryRole;
   text: string;
   mode?: HistoryMode;
   timestamp: number;
   actionPreview?: StoredActionPreview;
+  actionResult?: StoredActionResult;
 }
 
 export class ChatHistoryManager {
@@ -68,7 +81,9 @@ export class ChatHistoryManager {
       const text = Buffer.from(buffer).toString('utf8');
       const parsed = JSON.parse(text);
       if (Array.isArray(parsed)) {
-        return parsed.filter(this.isHistoryEntry);
+        return parsed
+          .filter(this.isHistoryEntry)
+          .map(entry => this.normalizeHistoryEntry(entry));
       }
       return [];
     } catch (err: any) {
@@ -81,6 +96,14 @@ export class ChatHistoryManager {
 
   private isHistoryEntry(value: any): value is HistoryEntry {
     return value && typeof value.text === 'string' && typeof value.role === 'string';
+  }
+
+  private normalizeHistoryEntry(entry: HistoryEntry): HistoryEntry {
+    const rawMode = (entry.mode as string | undefined);
+    if (rawMode === 'action') {
+      return { ...entry, mode: 'agent' };
+    }
+    return entry;
   }
 
   private computeWorkspaceKey(): string {

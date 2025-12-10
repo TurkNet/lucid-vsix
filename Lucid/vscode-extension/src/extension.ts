@@ -77,7 +77,7 @@ interface OllamaGenerateResponse {
   done: boolean;
 }
 
-type SendMode = 'ask' | 'action';
+type SendMode = 'ask' | 'agent';
 const LAST_MODE_STATE_KEY = 'lucid.lastSendMode';
 
 const INLINE_MAX_PREFIX_CHARS = 2000;
@@ -98,8 +98,8 @@ let lastInlineCache: { key: string; completion: string; timestamp: number } | un
 
 function getStoredSendMode(): SendMode {
   try {
-    const stored = extensionContext?.workspaceState.get<SendMode>(LAST_MODE_STATE_KEY);
-    return stored === 'action' ? 'action' : 'ask';
+    const stored = extensionContext?.workspaceState.get<string>(LAST_MODE_STATE_KEY);
+    return stored === 'agent' || stored === 'action' ? 'agent' : 'ask';
   } catch (err) {
     LucidLogger.debug('getStoredSendMode error', err);
     return 'ask';
@@ -340,7 +340,7 @@ async function requestInlineCompletionFromOllama(prompt: string, signal?: AbortS
             }
 
             if (msg.type === 'modeChanged') {
-              const newMode: SendMode = msg.mode === 'action' ? 'action' : 'ask';
+              const newMode: SendMode = (msg.mode === 'agent' || msg.mode === 'action') ? 'agent' : 'ask';
               await persistSendMode(newMode);
               return;
             }
@@ -355,7 +355,7 @@ async function requestInlineCompletionFromOllama(prompt: string, signal?: AbortS
             if (msg.type === 'replay') {
               const prompt: string = String(msg.prompt || '');
               if (!prompt) return;
-              const mode: SendMode = msg.mode === 'action' ? 'action' : 'ask';
+              const mode: SendMode = (msg.mode === 'agent' || msg.mode === 'action') ? 'agent' : 'ask';
               if (mode === 'ask') {
                 const streamingStatusEnabledReplay = LucidConfig.shouldShowStreamingStatus();
                 webviewView.webview.postMessage({ type: 'status', text: 'Sending prompt…', streaming: streamingStatusEnabledReplay });
@@ -363,7 +363,7 @@ async function requestInlineCompletionFromOllama(prompt: string, signal?: AbortS
               try {
                 await recordHistory({ role: 'user', text: prompt, mode });
                 const contextualPromptReplay = await buildPromptWithContext(prompt, attachedPaths);
-                if (mode === 'action') {
+                if (mode === 'agent') {
                   const actionPromptReplay = buildActionInstructionPrompt(contextualPromptReplay, prompt);
                   await actionHandler.handleActionFlow(webviewView.webview, actionPromptReplay, prompt);
                 } else {
@@ -381,7 +381,7 @@ async function requestInlineCompletionFromOllama(prompt: string, signal?: AbortS
             if (msg.type === 'send') {
               const prompt: string = String(msg.prompt || '');
               if (!prompt) return;
-              const mode: SendMode = msg.mode === 'action' ? 'action' : 'ask';
+              const mode: SendMode = (msg.mode === 'agent' || msg.mode === 'action') ? 'agent' : 'ask';
               if (mode === 'ask') {
                 const streamingStatusEnabled = LucidConfig.shouldShowStreamingStatus();
                 webviewView.webview.postMessage({ type: 'status', text: 'Sending prompt…', streaming: streamingStatusEnabled });
@@ -390,7 +390,7 @@ async function requestInlineCompletionFromOllama(prompt: string, signal?: AbortS
               try {
                 await recordHistory({ role: 'user', text: prompt, mode });
                 const contextualPrompt = await buildPromptWithContext(prompt, attachedPaths);
-                if (mode === 'action') {
+                if (mode === 'agent') {
                   const actionPrompt = buildActionInstructionPrompt(contextualPrompt, prompt);
                   await actionHandler.handleActionFlow(webviewView.webview, actionPrompt, prompt);
                 } else {
@@ -437,7 +437,8 @@ async function requestInlineCompletionFromOllama(prompt: string, signal?: AbortS
               role: entry.role,
               options: {
                 sendMode: entry.mode,
-                actionPreview: entry.actionPreview ? { ...entry.actionPreview } : undefined
+                actionPreview: entry.actionPreview ? { ...entry.actionPreview } : undefined,
+                actionOutput: entry.actionResult ? { ...entry.actionResult } : undefined
               }
             }));
             webviewView.webview.postMessage({ type: 'history', entries: historyPayload });
@@ -905,8 +906,9 @@ function buildActionInstructionPrompt(promptWithContext: string, originalPrompt:
     'Always return a JSON object describing the plan in a fenced ```json``` block with the shape {"command": string, "args": array, "type": "terminal"|"vscode"|"clipboard", "description": string, "text"?: string}.',
     'If the action is a shell/terminal command, also include a fenced ```bash``` block containing ONLY the executable line so the UI can render it separately.',
     'When editing files, prefer built-in VS Code commands such as editor.action.insertSnippet or workbench.action.files.save.',
-    'For terminal actions the "command" must be the actual executable (for example "./set_version.sh") and "args" must contain only real shell arguments—never helper names like "terminal.run" or "terminal.runSelectedText".',
-    'Never ask the user to run commands manually; provide the exact command and arguments yourself.'
+    'For terminal actions the "command" must be the actual executable (for example "./set_version.sh" or "go") and "args" must contain only real shell arguments—never helper names like "terminal.run", "terminal.runSelectedText", "lucid.runTerminalCommand", or descriptive phrases.',
+    'Never invent wrapper commands or editor helpers for shell executions. If you need to run a script, set the command to that script path and pass any flags or files through the "args" array.',
+    'Never ask the user to run commands manually; provide the exact command and arguments yourself so the agent can execute them directly.'
   ].join('\n\n');
 
   return [
