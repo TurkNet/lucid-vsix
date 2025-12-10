@@ -905,6 +905,7 @@ function buildActionInstructionPrompt(promptWithContext: string, originalPrompt:
     'Always return a JSON object describing the plan in a fenced ```json``` block with the shape {"command": string, "args": array, "type": "terminal"|"vscode"|"clipboard", "description": string, "text"?: string}.',
     'If the action is a shell/terminal command, also include a fenced ```bash``` block containing ONLY the executable line so the UI can render it separately.',
     'When editing files, prefer built-in VS Code commands such as editor.action.insertSnippet or workbench.action.files.save.',
+    'For terminal actions the "command" must be the actual executable (for example "./set_version.sh") and "args" must contain only real shell arguments—never helper names like "terminal.run" or "terminal.runSelectedText".',
     'Never ask the user to run commands manually; provide the exact command and arguments yourself.'
   ].join('\n\n');
 

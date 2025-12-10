@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { spawn } from 'child_process';
+import * as path from 'path';
 import { LucidConfig } from '../../../common/config';
 import { CurlLogger } from '../../../common/log/curlLogger';
 import { LucidLogger } from '../../../common/log/logger';
@@ -377,6 +378,19 @@ export class ActionHandler {
         resolve(result);
       };
 
+      const env = { ...process.env } as NodeJS.ProcessEnv;
+      if (process.platform !== 'win32') {
+        const extraBins = ['/usr/local/bin', '/opt/homebrew/bin'];
+        const currentPath = env.PATH || env.Path || '';
+        const pathParts = currentPath.split(path.delimiter).filter(Boolean);
+        for (const dir of extraBins) {
+          if (pathParts.indexOf(dir) === -1) {
+            pathParts.unshift(dir);
+          }
+        }
+        env.PATH = pathParts.join(path.delimiter);
+      }
+
       const pty: vscode.Pseudoterminal = {
         onDidWrite: writeEmitter.event,
         open: () => {
@@ -384,7 +398,15 @@ export class ActionHandler {
             ? vscode.workspace.workspaceFolders[0].uri.fsPath
             : process.cwd();
           writeEmitter.fire(`Running ${command} ${args.join(' ')}\r\n\r\n`);
-          child = spawn(command, args, { cwd, shell: process.platform === 'win32' });
+          try {
+            child = spawn(command, args, { cwd, shell: process.platform === 'win32', env });
+          } catch (spawnErr) {
+            const message = spawnErr instanceof Error ? spawnErr.message : String(spawnErr);
+            stderr += message;
+            writeEmitter.fire(`\r\n${message}\r\n`);
+            finish({ success: false, type: 'terminal', stdout, stderr: message });
+            return;
+          }
           child.stdout?.on('data', (chunk) => {
             const text = chunk.toString();
             stdout += text;
