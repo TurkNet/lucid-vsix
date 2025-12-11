@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-02-15
+### Added
+- Auto-applied edit review cards with git-style diffs plus Keep/Undo/View controls, diff stats, and workflow history integration.
+- Remediation responses now surface the raw Ollama advice whenever JSON parsing fails, so guidance is always visible even without a structured plan.
+
+### Changed
+- Terminal action payloads are normalized (e.g., strip `terminal.run` wrappers and run composite commands via `/bin/sh -c` or `cmd /c`) before execution.
+
+### Fixed
+- Diff “View” buttons now open a reliable VS Code diff by writing the before/after buffers to temporary files.
+- VS Code action recommendations that emit `open`/`vscode` now map to real VS Code commands (e.g., `workbench.action.files.openFile`), so “open file” suggestions execute correctly.
+
 ## [0.2.0] - 2025-12-10
 ### Added
 - Release notes file to surface change history directly on the VS Code Marketplace listing.
