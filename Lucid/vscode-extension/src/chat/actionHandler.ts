@@ -314,12 +314,24 @@ export class ActionHandler {
     try {
       const parsed = JSON.parse(snippet.trim());
       if (parsed && typeof parsed.command === 'string') {
-        return parsed as LucidActionPayload;
+        return this.normalizeParsedPayload(parsed as LucidActionPayload);
       }
     } catch (_) {
       // ignore parse errors
     }
     return undefined;
+  }
+
+  private normalizeParsedPayload(payload: LucidActionPayload): LucidActionPayload {
+    const normalized: LucidActionPayload = { ...payload };
+    const type = this.inferActionType(normalized);
+    if (type === 'terminal') {
+      const parts = this.buildTerminalCommandParts(normalized);
+      normalized.command = parts.command;
+      normalized.args = parts.args;
+      normalized.type = 'terminal';
+    }
+    return normalized;
   }
 
   private registerPendingAction(webview: vscode.Webview, payload: LucidActionPayload, originalPrompt: string): string {
@@ -647,6 +659,18 @@ export class ActionHandler {
       let resolved = false;
       const suggestions: string[] = [];
       const commandArgs = Array.isArray(args) ? [...args] : [];
+      const compositeLine = [command].concat(args || []).join(' ').trim();
+      let spawnCommand = command;
+      let spawnArgs = Array.isArray(args) ? [...args] : [];
+      if (this.shouldRunViaShell(command, args)) {
+        if (process.platform === 'win32') {
+          spawnCommand = 'cmd';
+          spawnArgs = ['/d', '/c', compositeLine];
+        } else {
+          spawnCommand = '/bin/sh';
+          spawnArgs = ['-c', compositeLine];
+        }
+      }
 
       const finish = (result: ActionExecutionResult) => {
         if (resolved) return;
@@ -694,9 +718,9 @@ export class ActionHandler {
             ? vscode.workspace.workspaceFolders[0].uri.fsPath
             : process.cwd();
           cwdUsed = cwd;
-          writeEmitter.fire(`Running ${command} ${args.join(' ')}\r\n\r\n`);
+          writeEmitter.fire(`Running ${compositeLine || command}\r\n\r\n`);
           try {
-            child = spawn(command, args, { cwd, shell: process.platform === 'win32', env });
+            child = spawn(spawnCommand, spawnArgs, { cwd, shell: process.platform === 'win32', env });
           } catch (spawnErr) {
             const message = spawnErr instanceof Error ? spawnErr.message : String(spawnErr);
             stderr += message;
@@ -1171,6 +1195,17 @@ export class ActionHandler {
       }
     }
     return { added, removed };
+  }
+
+  private shouldRunViaShell(command: string, args: string[]): boolean {
+    const tokens = [command].concat(args || []);
+    const operators = ['&&', '||', ';', '|', '>', '<'];
+    for (const token of tokens) {
+      if (!token) continue;
+      if (operators.includes(token.trim())) return true;
+      if (/[&|;<>]/.test(token)) return true;
+    }
+    return false;
   }
 
   private truncateForReview(text: string | undefined, max = 1000): string {
