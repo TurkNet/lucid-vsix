@@ -204,6 +204,133 @@
       flex-direction: column;
       gap: 8px;
     }
+    .auto-edit-review {
+      margin-top: 10px;
+      border-radius: 12px;
+      border: 1px solid rgba(255,255,255,0.08);
+      background: rgba(15, 20, 29, 0.9);
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .auto-edit-review[data-state="kept"] {
+      border-color: rgba(63, 207, 142, 0.5);
+    }
+    .auto-edit-review[data-state="undone"] {
+      border-color: rgba(255, 105, 97, 0.4);
+    }
+    .auto-edit-head {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    .auto-edit-summary {
+      flex: 1;
+      min-width: 160px;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+    .auto-edit-summary-title {
+      font-size: 13px;
+      font-weight: 600;
+    }
+    .auto-edit-summary-desc {
+      font-size: 11px;
+      color: var(--vscode-descriptionForeground);
+    }
+    .auto-edit-actions {
+      display: inline-flex;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+    .auto-edit-actions button {
+      border-radius: 999px;
+      font-size: 12px;
+      padding: 4px 10px;
+    }
+    .auto-edit-actions button.undo {
+      background: rgba(255, 105, 97, 0.15);
+      color: #ff8780;
+    }
+    .auto-edit-file {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 12px;
+      padding: 8px 10px;
+      border-radius: 8px;
+      background: rgba(0,0,0,0.25);
+    }
+    .auto-edit-file-path {
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-weight: 600;
+    }
+    .auto-edit-file-stats {
+      display: inline-flex;
+      gap: 8px;
+      font-weight: 600;
+    }
+    .auto-edit-file-stats .added {
+      color: #3fcf8e;
+    }
+    .auto-edit-file-stats .removed {
+      color: #ff6961;
+    }
+    .auto-edit-review-status {
+      font-size: 11px;
+      color: var(--vscode-descriptionForeground);
+    }
+    .diff-view {
+      margin: 0;
+      background: rgba(0,0,0,0.35);
+      border-radius: 10px;
+      padding: 12px;
+      overflow: auto;
+      font-family: var(--vscode-editor-font-family, monospace);
+      font-size: 12px;
+      line-height: 1.4;
+      white-space: pre-wrap;
+    }
+    .diff-line {
+      display: block;
+      padding: 2px 6px;
+      border-radius: 4px;
+    }
+    .diff-line + .diff-line {
+      margin-top: 2px;
+    }
+    .diff-line.add {
+      background: rgba(63, 207, 142, 0.25);
+    }
+    .diff-line.remove {
+      background: rgba(255, 105, 97, 0.25);
+    }
+    .diff-line.meta {
+      color: var(--vscode-descriptionForeground);
+    }
+    .auto-edit-review-actions {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    .auto-edit-review-actions button {
+      flex: 1;
+      justify-content: center;
+    }
+    .auto-edit-review-actions button.undo {
+      background: var(--vscode-errorForeground);
+      color: #000;
+    }
+    .auto-edit-review-status {
+      font-size: 11px;
+      color: var(--vscode-descriptionForeground);
+    }
     .action-output {
       margin-top: 10px;
       border-radius: 10px;
@@ -430,6 +557,235 @@
     }
     .todo-item button {
       align-self: flex-start;
+    }
+    .workflow-card {
+      margin-top: 12px;
+      border-radius: 12px;
+      border: 1px solid rgba(255,255,255,0.08);
+      background: rgba(8,12,18,0.92);
+      padding: 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+    .workflow-section {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .workflow-section-title {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--vscode-descriptionForeground);
+    }
+    .workflow-files {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 8px;
+    }
+    .workflow-file {
+      border: 1px solid rgba(255,255,255,0.07);
+      border-radius: 8px;
+      padding: 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      background: rgba(255,255,255,0.02);
+    }
+    .workflow-file-path {
+      font-size: 12px;
+      font-weight: 600;
+      word-break: break-word;
+    }
+    .workflow-file-summary {
+      font-size: 12px;
+      color: var(--vscode-descriptionForeground);
+    }
+    .workflow-badge {
+      font-size: 10px;
+      padding: 2px 6px;
+      border-radius: 999px;
+      align-self: flex-start;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      border: 1px solid rgba(255,255,255,0.08);
+    }
+    .workflow-badge[data-status="changed"], .workflow-test-status[data-status="passed"] {
+      color: #3fcf8e;
+      border-color: rgba(63,207,142,0.4);
+    }
+    .workflow-badge[data-status="scanned"], .workflow-test-status[data-status="running"] {
+      color: #f4d35e;
+      border-color: rgba(244,211,94,0.4);
+    }
+    .workflow-badge[data-status="error"], .workflow-test-status[data-status="failed"] {
+      color: var(--vscode-errorForeground);
+      border-color: rgba(255,105,97,0.5);
+    }
+    .workflow-diff-state {
+      display: inline-flex;
+      align-items: center;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+      background: rgba(255,255,255,0.08);
+    }
+    .workflow-diff-state.keep {
+      background: rgba(63, 207, 142, 0.2);
+      color: #3fcf8e;
+    }
+    .workflow-diff-state.undo {
+      background: rgba(255, 105, 97, 0.2);
+      color: #ff6961;
+    }
+    .workflow-diff {
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 10px;
+      overflow: hidden;
+    }
+    .workflow-diff.focused {
+      box-shadow: 0 0 0 2px rgba(63,207,142,0.35);
+    }
+    .workflow-diff-header {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 8px 10px;
+      background: rgba(0,0,0,0.3);
+      font-weight: 600;
+    }
+    .workflow-diff-actions {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+    .workflow-diff-body {
+      padding: 10px;
+      background: rgba(0,0,0,0.35);
+    }
+    .workflow-diff-body .diff-view {
+      margin: 0;
+      max-height: 220px;
+      overflow: auto;
+      white-space: pre-wrap;
+      font-size: 12px;
+    }
+    .workflow-diff-meta {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 11px;
+      margin-bottom: 6px;
+      gap: 10px;
+    }
+    .workflow-diff-file {
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-weight: 600;
+    }
+    .workflow-diff-stats {
+      display: inline-flex;
+      gap: 6px;
+      font-weight: 600;
+    }
+    .workflow-diff-stats .added {
+      color: #3fcf8e;
+    }
+    .workflow-diff-stats .removed {
+      color: #ff6961;
+    }
+    .workflow-patches,
+    .workflow-tests {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .workflow-patch {
+      border: 1px solid rgba(255,255,255,0.05);
+      border-radius: 8px;
+      padding: 10px;
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      align-items: center;
+    }
+    .workflow-patch-info {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      font-size: 12px;
+    }
+    .workflow-tests-row {
+      border: 1px solid rgba(255,255,255,0.05);
+      border-radius: 8px;
+      padding: 10px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+    }
+    .workflow-test-name {
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .workflow-test-status {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+    .workflow-report {
+      border: 1px solid rgba(255,255,255,0.05);
+      border-radius: 10px;
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      background: rgba(0,0,0,0.25);
+    }
+    .workflow-report-title {
+      font-size: 13px;
+      font-weight: 600;
+    }
+    .workflow-report-highlights {
+      margin: 0;
+      padding-left: 18px;
+      color: var(--vscode-descriptionForeground);
+      font-size: 12px;
+    }
+    .workflow-metrics {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+      gap: 10px;
+    }
+    .workflow-metric {
+      border: 1px solid rgba(255,255,255,0.06);
+      border-radius: 8px;
+      padding: 8px;
+      text-align: center;
+    }
+    .workflow-metric-label {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--vscode-descriptionForeground);
+    }
+    .workflow-metric-value {
+      font-size: 14px;
+      font-weight: 600;
+    }
+    .workflow-artifacts {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    .workflow-empty {
+      font-size: 12px;
+      color: var(--vscode-descriptionForeground);
     }
     .action-preview-header {
       display: flex;
@@ -930,6 +1286,144 @@
         if (jsonBlock) card.appendChild(jsonBlock);
 
         return card;
+      }
+
+      function createAutoEditReview(review) {
+        if (!review || !review.id) return null;
+        var card = document.createElement('div');
+        card.className = 'auto-edit-review';
+        card.setAttribute('data-review-id', review.id);
+        if (review.status) card.dataset.state = review.status;
+
+        var head = document.createElement('div');
+        head.className = 'auto-edit-head';
+
+        var summary = document.createElement('div');
+        summary.className = 'auto-edit-summary';
+        var title = document.createElement('div');
+        title.className = 'auto-edit-summary-title';
+        title.textContent = '1 file changed';
+        summary.appendChild(title);
+        var subtitle = document.createElement('div');
+        subtitle.className = 'auto-edit-summary-desc';
+        var fallback = review.path || review.fileName || 'editor action';
+        if (review.command) {
+          fallback += ' • ' + review.command;
+        }
+        subtitle.textContent = review.description || fallback;
+        summary.appendChild(subtitle);
+        head.appendChild(summary);
+
+        var toolbar = document.createElement('div');
+        toolbar.className = 'auto-edit-actions';
+
+        var keepBtn = document.createElement('button');
+        keepBtn.type = 'button';
+        keepBtn.classList.add('primary');
+        keepBtn.textContent = 'Keep';
+        keepBtn.dataset.role = 'keep';
+        keepBtn.addEventListener('click', function () {
+          HostBridge.postMessage({ type: 'autoEditKeep', reviewId: review.id });
+        });
+        toolbar.appendChild(keepBtn);
+
+        var undoBtn = document.createElement('button');
+        undoBtn.type = 'button';
+        undoBtn.classList.add('undo');
+        undoBtn.textContent = 'Undo';
+        undoBtn.dataset.role = 'undo';
+        undoBtn.addEventListener('click', function () {
+          HostBridge.postMessage({ type: 'autoEditUndo', reviewId: review.id });
+        });
+        toolbar.appendChild(undoBtn);
+
+        var viewBtn = document.createElement('button');
+        viewBtn.type = 'button';
+        viewBtn.textContent = 'View';
+        viewBtn.addEventListener('click', function () {
+          HostBridge.postMessage({ type: 'autoEditView', reviewId: review.id });
+        });
+        toolbar.appendChild(viewBtn);
+
+        head.appendChild(toolbar);
+        card.appendChild(head);
+
+        var fileRow = document.createElement('div');
+        fileRow.className = 'auto-edit-file';
+        var filePath = document.createElement('div');
+        filePath.className = 'auto-edit-file-path';
+        filePath.textContent = review.path || review.fileName || 'Active editor';
+        fileRow.appendChild(filePath);
+        var stats = document.createElement('div');
+        stats.className = 'auto-edit-file-stats';
+        var added = document.createElement('span');
+        added.className = 'added';
+        added.textContent = `+${typeof review.added === 'number' ? review.added : 0}`;
+        stats.appendChild(added);
+        var removed = document.createElement('span');
+        removed.className = 'removed';
+        removed.textContent = `-${typeof review.removed === 'number' ? review.removed : 0}`;
+        stats.appendChild(removed);
+        fileRow.appendChild(stats);
+        card.appendChild(fileRow);
+
+        var diffBlock = createDiffBlock(review.diff || '');
+        card.appendChild(diffBlock);
+
+        var status = document.createElement('div');
+        status.className = 'auto-edit-review-status';
+        if (review.status === 'kept') {
+          status.textContent = 'Marked as kept.';
+        } else if (review.status === 'undone') {
+          status.textContent = 'Marked as undone.';
+        } else {
+          status.textContent = 'Review the diff and choose Keep or Undo.';
+        }
+        card.appendChild(status);
+
+        return card;
+      }
+
+      function updateAutoEditReviewStatus(payload) {
+        if (!payload || !payload.reviewId) return;
+        var block = document.querySelector('.auto-edit-review[data-review-id="' + payload.reviewId + '"]');
+        if (!block) return;
+        if (payload.message) {
+          var status = block.querySelector('.auto-edit-review-status');
+          if (status) status.textContent = payload.message;
+        }
+        var controlButtons = block.querySelectorAll('button[data-role="keep"], button[data-role="undo"]');
+        for (var i = 0; i < controlButtons.length; i++) {
+          controlButtons[i].disabled = true;
+        }
+        if (payload.status) {
+          block.dataset.state = payload.status;
+        }
+      }
+
+      function createDiffBlock(diffText) {
+        var wrapper = document.createElement('pre');
+        wrapper.className = 'diff-view';
+        if (!diffText) {
+          wrapper.textContent = '(no diff)';
+          return wrapper;
+        }
+        var lines = diffText.replace(/\r\n/g, '\n').split('\n');
+        for (var i = 0; i < lines.length; i++) {
+          var line = document.createElement('span');
+          line.className = 'diff-line';
+          var content = lines[i] || '';
+          if (content.startsWith('+')) {
+            line.classList.add('add');
+          } else if (content.startsWith('-')) {
+            line.classList.add('remove');
+          } else if (content.startsWith('diff') || content.startsWith('---') || content.startsWith('+++')) {
+            line.classList.add('meta');
+          }
+          line.textContent = content;
+          wrapper.appendChild(line);
+        }
+        return wrapper;
       }
 
         function createActionOutput(actionResult, defaultOpen) {
@@ -1456,6 +1950,178 @@
         }
       }
 
+      function createWorkflowSummaryCard(summary) {
+        try {
+          if (!summary) return null;
+          var card = document.createElement('div');
+          card.className = 'workflow-card';
+
+          var rendered = 0;
+          var patchSection = renderWorkflowPatches(summary.patches);
+          if (patchSection) { card.appendChild(patchSection); rendered++; }
+          var testSection = renderWorkflowTests(summary.tests);
+          if (testSection) { card.appendChild(testSection); rendered++; }
+          var reportSection = renderWorkflowReport(summary.report);
+          if (reportSection) { card.appendChild(reportSection); rendered++; }
+
+          if (!rendered) {
+            var empty = document.createElement('div');
+            empty.className = 'workflow-empty';
+            empty.textContent = 'No workflow details available.';
+            card.appendChild(empty);
+          }
+          return card;
+        } catch (e) {
+          console.error(e);
+          return null;
+        }
+      }
+
+      function createWorkflowSection(title) {
+        var section = document.createElement('div');
+        section.className = 'workflow-section';
+        var heading = document.createElement('div');
+        heading.className = 'workflow-section-title';
+        heading.textContent = title;
+        section.appendChild(heading);
+        return section;
+      }
+
+      function focusWorkflowDiff(diffId) {
+        if (!diffId) return;
+        try {
+          var target = document.getElementById('workflow-diff-' + diffId);
+          if (!target) return;
+          target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          target.classList.add('focused');
+          setTimeout(function () { target.classList.remove('focused'); }, 1500);
+        } catch (e) { }
+      }
+
+      function renderWorkflowPatches(patches) {
+        if (!Array.isArray(patches) || patches.length === 0) return null;
+        var section = createWorkflowSection('Patches');
+        var list = document.createElement('div');
+        list.className = 'workflow-patches';
+        patches.forEach(function (patch) {
+          var row = document.createElement('div');
+          row.className = 'workflow-patch';
+          var info = document.createElement('div');
+          info.className = 'workflow-patch-info';
+          var title = document.createElement('div');
+          title.textContent = patch.title || patch.actionId;
+          info.appendChild(title);
+          if (patch.description) {
+            var desc = document.createElement('div');
+            desc.textContent = patch.description;
+            info.appendChild(desc);
+          }
+          row.appendChild(info);
+          var cta = document.createElement('button');
+          cta.type = 'button';
+          cta.textContent = patch.applied ? 'Applied' : 'Apply Patch';
+          cta.disabled = !!patch.applied;
+          cta.addEventListener('click', function () {
+            HostBridge.postMessage({ type: 'actionRun', actionId: patch.actionId });
+          });
+          row.appendChild(cta);
+          list.appendChild(row);
+        });
+        section.appendChild(list);
+        return section;
+      }
+
+      function renderWorkflowTests(tests) {
+        if (!Array.isArray(tests) || tests.length === 0) return null;
+        var section = createWorkflowSection('Tests');
+        var list = document.createElement('div');
+        list.className = 'workflow-tests';
+        tests.forEach(function (test) {
+          var row = document.createElement('div');
+          row.className = 'workflow-tests-row';
+          var name = document.createElement('div');
+          name.className = 'workflow-test-name';
+          name.textContent = test.name;
+          row.appendChild(name);
+          var badge = document.createElement('div');
+          badge.className = 'workflow-test-status';
+          badge.dataset.status = test.status;
+          badge.textContent = test.status;
+          row.appendChild(badge);
+          if (test.logActionId) {
+            var logBtn = document.createElement('button');
+            logBtn.type = 'button';
+            logBtn.textContent = 'View Log';
+            logBtn.addEventListener('click', function () {
+              HostBridge.postMessage({ type: 'actionRun', actionId: test.logActionId });
+            });
+            row.appendChild(logBtn);
+          }
+          list.appendChild(row);
+        });
+        section.appendChild(list);
+        return section;
+      }
+
+      function renderWorkflowReport(report) {
+        if (!report) return null;
+        var section = createWorkflowSection(report.title || 'Report');
+        var card = document.createElement('div');
+        card.className = 'workflow-report';
+        if (report.highlights && report.highlights.length) {
+          var ul = document.createElement('ul');
+          ul.className = 'workflow-report-highlights';
+          report.highlights.forEach(function (item) {
+            var li = document.createElement('li');
+            li.textContent = item;
+            ul.appendChild(li);
+          });
+          card.appendChild(ul);
+        }
+        if (report.metrics && report.metrics.length) {
+          var metrics = document.createElement('div');
+          metrics.className = 'workflow-metrics';
+          report.metrics.forEach(function (metric) {
+            var box = document.createElement('div');
+            box.className = 'workflow-metric';
+            var label = document.createElement('div');
+            label.className = 'workflow-metric-label';
+            label.textContent = metric.label;
+            var value = document.createElement('div');
+            value.className = 'workflow-metric-value';
+            value.textContent = metric.value;
+            box.appendChild(label);
+            box.appendChild(value);
+            metrics.appendChild(box);
+          });
+          card.appendChild(metrics);
+        }
+        if (report.artifacts && report.artifacts.length) {
+          var artifacts = document.createElement('div');
+          artifacts.className = 'workflow-artifacts';
+          report.artifacts.forEach(function (artifact) {
+            var btn = document.createElement('button');
+            btn.type = 'button';
+            btn.textContent = artifact.label;
+            if (artifact.url) {
+              btn.addEventListener('click', function () {
+                HostBridge.postMessage({ type: 'openUrl', url: artifact.url });
+              });
+            } else if (artifact.actionId) {
+              btn.addEventListener('click', function () {
+                HostBridge.postMessage({ type: 'actionRun', actionId: artifact.actionId });
+              });
+            } else {
+              btn.disabled = true;
+            }
+            artifacts.appendChild(btn);
+          });
+          card.appendChild(artifacts);
+        }
+        section.appendChild(card);
+        return section;
+      }
+
       function enqueue(job) {
         state.queue.push(job);
         if (!state.raf) {
@@ -1616,6 +2282,10 @@
           var outputLength = 0;
           var todoBlock = null;
           var todoLength = 0;
+          var workflowBlock = null;
+          var workflowLength = 0;
+          var autoReviewBlock = null;
+          var autoReviewLength = 0;
 
           try {
             if (options && options.actionPreview) {
@@ -1633,9 +2303,21 @@
                 todoLength = estimateTodoListLength(options.todoList) || todoBlock.textContent.length;
               }
             }
+            if (options && options.workflowSummary) {
+              workflowBlock = createWorkflowSummaryCard(options.workflowSummary);
+              if (workflowBlock) {
+                workflowLength = workflowBlock.textContent.length;
+              }
+            }
+            if (options && options.autoEditReview) {
+              autoReviewBlock = createAutoEditReview(options.autoEditReview);
+              if (autoReviewBlock) {
+                autoReviewLength = (options.autoEditReview.diff && options.autoEditReview.diff.length) || autoReviewBlock.textContent.length;
+              }
+            }
           } catch (e) { console.error(e); }
 
-          var shouldRenderMessage = (safeText && safeText.length > 0) || !!previewBlock;
+          var shouldRenderMessage = (safeText && safeText.length > 0) || !!previewBlock || !!autoReviewBlock;
           var bodyEl = null;
           if (shouldRenderMessage) {
             bodyEl = document.createElement('div');
@@ -1644,6 +2326,9 @@
             if (previewBlock) {
               block.classList.add('message-action');
               bodyEl.appendChild(previewBlock);
+            }
+            if (autoReviewBlock) {
+              bodyEl.appendChild(autoReviewBlock);
             }
             block.appendChild(bodyEl);
           }
@@ -1769,6 +2454,13 @@
             todoBlock.dataset.textLength = String(todoLength);
             messages.appendChild(todoBlock);
             state.totalChars += todoLength;
+            appended = true;
+          }
+
+          if (workflowBlock) {
+            workflowBlock.dataset.textLength = String(workflowLength);
+            messages.appendChild(workflowBlock);
+            state.totalChars += workflowLength;
             appended = true;
           }
 
@@ -1907,6 +2599,9 @@
             break;
           case 'status':
             setStatus(msg.text || 'Idle', msg.level || 'info', !!msg.streaming);
+            break;
+          case 'autoEditReviewUpdate':
+            updateAutoEditReviewStatus(msg);
             break;
         }
       });

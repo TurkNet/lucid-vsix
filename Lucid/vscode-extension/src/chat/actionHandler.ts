@@ -1,11 +1,13 @@
 import * as vscode from 'vscode';
 import { spawn } from 'child_process';
 import * as path from 'path';
+import * as os from 'os';
 import { LucidConfig } from '../../../common/config';
 import { CurlLogger } from '../../../common/log/curlLogger';
 import { LucidLogger } from '../../../common/log/logger';
 import { AskHandler } from './askHandler';
 import { ChatHistoryManager, StoredActionPreview, HistoryRole, StoredActionResult } from './historyManager';
+import { postWorkflowSummaryMessage } from './workflowSummary';
 
 export interface LucidActionPayload {
   command: string;
@@ -25,6 +27,7 @@ interface ActionExecutionResult {
   args?: string[];
   cwd?: string;
   suggestions?: string[];
+  autoEditReview?: AutoEditReviewDisplay;
 }
 
 interface PendingActionEntry {
@@ -79,8 +82,66 @@ interface TodoListWebviewPayload {
   items: TodoListItemPayload[];
 }
 
+interface AutoEditReviewDisplay {
+  id: string;
+  diff: string;
+  fileName?: string;
+  description?: string;
+  path?: string;
+  added?: number;
+  removed?: number;
+  command?: string;
+  status?: 'pending' | 'kept' | 'undone';
+}
+
+interface PendingAutoEditReview extends AutoEditReviewDisplay {
+  documentUri: string;
+  documentPath?: string;
+  documentVersion: number;
+  languageId?: string;
+  beforeText: string;
+  afterText: string;
+  timestamp: number;
+}
+
+const TERMINAL_FILE_EDIT_COMMANDS = new Set([
+  'sed',
+  'perl',
+  'python',
+  'python3',
+  'ruby',
+  'node',
+  'npx',
+  'npm',
+  'pnpm',
+  'yarn',
+  'deno',
+  'bash',
+  'sh',
+  'zsh',
+  'fish',
+  'pwsh',
+  'powershell',
+  'cmd',
+  'awk',
+  'patch',
+  'apply_patch',
+  'ed',
+  'cat',
+  'tee'
+]);
+
+const DIFFABLE_EDITOR_COMMANDS = new Set<string>([
+  'editor.action.insert',
+  'editor.action.insertsnippet',
+  'editor.action.delete',
+  'editor.action.deletelines',
+  'editor.action.clipboardcutaction'
+]);
+
 export class ActionHandler {
   private readonly pendingActions = new Map<string, PendingActionEntry>();
+  private readonly pendingAutoEditReviews = new Map<string, PendingAutoEditReview>();
 
   constructor(
     private readonly askHandler: AskHandler,
@@ -106,6 +167,10 @@ export class ActionHandler {
       }
 
       const promptForReview = originalPrompt || finalPrompt;
+      if (this.shouldAutoExecuteVsCodeAction(actionPayload)) {
+        await this.executeAutoVsCodeAction(webview, actionPayload);
+        return;
+      }
       const actionId = this.registerPendingAction(webview, actionPayload, promptForReview);
       const preview = this.buildActionPreview(actionId, actionPayload);
       webview.postMessage({
@@ -122,6 +187,42 @@ export class ActionHandler {
       webview.postMessage({ type: 'status', text: 'Action failed', level: 'error', streaming: false });
       LucidLogger.error('handleActionFlow error', err);
       await this.logHistory('error', `Action mode failed: ${message}`, 'agent');
+    }
+  }
+
+  private shouldAutoExecuteVsCodeAction(payload: LucidActionPayload): boolean {
+    if (!payload || typeof payload.command !== 'string') {
+      return false;
+    }
+    const type = this.inferActionType(payload);
+    if (type !== 'vscode') {
+      return false;
+    }
+    return payload.command.trim().toLowerCase().startsWith('editor.action.');
+  }
+
+  private async executeAutoVsCodeAction(webview: vscode.Webview, payload: LucidActionPayload): Promise<void> {
+    webview.postMessage({ type: 'status', text: 'Applying VS Code action…', streaming: false });
+    try {
+      const executionResult = await this.executeActionPayload(payload);
+      const summary = this.buildActionSummary(payload, executionResult);
+      const prefix = `VS Code action ${payload.command} was applied automatically.`;
+      const message = summary ? `${prefix}\n\n${summary}` : prefix;
+      const role: HistoryRole = executionResult.success ? 'assistant' : 'error';
+      const options = executionResult.autoEditReview ? { autoEditReview: executionResult.autoEditReview } : undefined;
+      webview.postMessage({ type: 'append', text: message, role, options });
+      await this.logHistory(role, message, 'agent');
+      if (executionResult.autoEditReview) {
+        await this.emitAutoEditWorkflowSummary(webview, executionResult.autoEditReview.id);
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      const text = `Automatic VS Code action failed: ${message}`;
+      webview.postMessage({ type: 'append', text, role: 'error' });
+      LucidLogger.error('executeAutoVsCodeAction error', err);
+      await this.logHistory('error', text, 'agent');
+    } finally {
+      webview.postMessage({ type: 'status', text: 'Idle', streaming: false });
     }
   }
 
@@ -241,9 +342,15 @@ export class ActionHandler {
       const executionResult = await this.executeActionPayload(entry.payload);
       const summary = this.buildActionSummary(entry.payload, executionResult);
       const storedResult = this.buildStoredActionResult(entry.payload, executionResult);
-      const options = storedResult ? { actionOutput: storedResult } : undefined;
+      const optionsPayload: Record<string, any> = {};
+      if (storedResult) optionsPayload.actionOutput = storedResult;
+      if (executionResult.autoEditReview) optionsPayload.autoEditReview = executionResult.autoEditReview;
+      const options = Object.keys(optionsPayload).length ? optionsPayload : undefined;
       targetView.postMessage({ type: 'append', text: summary, role: executionResult.success ? 'assistant' : 'error', options });
       await this.logHistory(executionResult.success ? 'assistant' : 'error', summary, 'agent', undefined, storedResult);
+      if (executionResult.autoEditReview) {
+        await this.emitAutoEditWorkflowSummary(targetView, executionResult.autoEditReview.id);
+      }
       await this.sendActionReviewToOllama(targetView, entry.payload, executionResult, entry.originalPrompt, summary);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -261,6 +368,81 @@ export class ActionHandler {
       if (entry.webview === webview) {
         this.pendingActions.delete(id);
       }
+    }
+  }
+
+  async keepAutoEditReview(reviewId: string, webview: vscode.Webview): Promise<void> {
+    const entry = this.pendingAutoEditReviews.get(reviewId);
+    if (!entry) {
+      this.postAutoEditReviewUpdate(webview, reviewId, 'error', 'Change is no longer available to confirm.');
+      return;
+    }
+    entry.status = 'kept';
+    this.postAutoEditReviewUpdate(webview, reviewId, 'kept', 'Change kept. You can continue editing normally.');
+    await this.emitAutoEditWorkflowSummary(webview, reviewId);
+    await this.logHistory('assistant', `Auto-applied edit kept (${entry.fileName || 'document'}).`, 'agent');
+  }
+
+  async undoAutoEditReview(reviewId: string, webview: vscode.Webview): Promise<void> {
+    const entry = this.pendingAutoEditReviews.get(reviewId);
+    if (!entry) {
+      this.postAutoEditReviewUpdate(webview, reviewId, 'error', 'Change is no longer available to undo.');
+      return;
+    }
+    let document = this.findDocument(entry.documentUri);
+    if (!document) {
+      try {
+        document = await vscode.workspace.openTextDocument(vscode.Uri.parse(entry.documentUri));
+      } catch (err) {
+        LucidLogger.error('Failed to reopen document for undo', err);
+      }
+    }
+    if (!document) {
+      this.postAutoEditReviewUpdate(webview, reviewId, 'error', 'Document is no longer open. Open the file and try undo again.');
+      return;
+    }
+    if (document.version !== entry.documentVersion) {
+      this.postAutoEditReviewUpdate(webview, reviewId, 'error', 'Document has changed since the auto edit. Please review manually.');
+      return;
+    }
+    const revertRange = new vscode.Range(
+      new vscode.Position(0, 0),
+      document.lineCount > 0 ? document.lineAt(Math.max(0, document.lineCount - 1)).range.end : new vscode.Position(0, 0)
+    );
+    const edit = new vscode.WorkspaceEdit();
+    edit.replace(document.uri, revertRange, entry.beforeText);
+    const applied = await vscode.workspace.applyEdit(edit);
+    if (!applied) {
+      this.postAutoEditReviewUpdate(webview, reviewId, 'error', 'Failed to undo change. Please use Undo in the editor.');
+      return;
+    }
+    entry.status = 'undone';
+    entry.afterText = entry.beforeText;
+    entry.documentVersion = document.version;
+    this.postAutoEditReviewUpdate(webview, reviewId, 'undone', 'Change was undone and previous content restored.');
+    await this.emitAutoEditWorkflowSummary(webview, reviewId);
+    await this.logHistory('assistant', `Auto-applied edit was undone (${entry.fileName || 'document'}).`, 'agent');
+  }
+
+  async viewAutoEditReview(reviewId: string, webview: vscode.Webview): Promise<void> {
+    const entry = this.pendingAutoEditReviews.get(reviewId);
+    if (!entry) {
+      this.postAutoEditReviewUpdate(webview, reviewId, 'error', 'Change is no longer available to view.');
+      return;
+    }
+    try {
+      const title = `${entry.fileName || 'Auto edit'} (before ↔ after)`;
+      const files = await this.writeDiffPreviewFiles(entry);
+      await vscode.commands.executeCommand(
+        'vscode.diff',
+        files.before,
+        files.after,
+        title,
+        { preview: false }
+      );
+    } catch (err) {
+      LucidLogger.error('viewAutoEditReview error', err);
+      this.postAutoEditReviewUpdate(webview, reviewId, 'error', 'Failed to open diff view. Check logs for details.');
     }
   }
 
@@ -388,6 +570,15 @@ export class ActionHandler {
     }
 
     if (kind === 'vscode') {
+      const normalizedCommand = (action.command || '').trim().toLowerCase();
+      const handled = await this.tryHandleEditorSnippetCommand(normalizedCommand, action);
+      if (handled) {
+        return handled;
+      }
+      const diffable = await this.tryExecuteDiffableEditorCommand(normalizedCommand, action);
+      if (diffable) {
+        return diffable;
+      }
       try {
         const commandArgs = this.coerceCommandArgs(action.args);
         await vscode.commands.executeCommand(action.command, ...commandArgs);
@@ -399,6 +590,21 @@ export class ActionHandler {
     }
 
     const terminalParts = this.buildTerminalCommandParts(action);
+    const violation = this.describeTerminalFileEditViolation(action, terminalParts.command, terminalParts.args);
+    if (violation) {
+      LucidLogger.warn('Blocked terminal-based file edit attempt', { action: action.command, args: action.args });
+      return {
+        success: false,
+        type: 'terminal',
+        stderr: violation,
+        command: terminalParts.command,
+        args: terminalParts.args,
+        suggestions: [
+          'Use VS Code commands such as editor.action.insertSnippet or editor.action.replace with the desired snippet to modify files.',
+          'Return the updated code snippet directly in the action JSON so the extension can apply it safely.'
+        ]
+      };
+    }
     return this.runTerminalAction(terminalParts.command, terminalParts.args);
   }
 
@@ -592,10 +798,405 @@ export class ActionHandler {
     return details.filter(Boolean).join('\n\n');
   }
 
+  private async tryHandleEditorSnippetCommand(
+    normalizedCommand: string,
+    action: LucidActionPayload
+  ): Promise<ActionExecutionResult | undefined> {
+    if (normalizedCommand !== 'editor.action.replace') {
+      return undefined;
+    }
+    return await this.applySnippetReplacement(action);
+  }
+
+  private async tryExecuteDiffableEditorCommand(
+    normalizedCommand: string,
+    action: LucidActionPayload
+  ): Promise<ActionExecutionResult | undefined> {
+    const shouldDiff = DIFFABLE_EDITOR_COMMANDS.has(normalizedCommand);
+    if (!shouldDiff) return undefined;
+    const editor = vscode.window.activeTextEditor;
+    if (!editor) {
+      return {
+        success: false,
+        type: 'vscode',
+        stderr: 'Open a text editor to run this command.',
+        command: action.command,
+        args: this.toStringArgs(action.args),
+        suggestions: ['Open the relevant file in VS Code and try again.']
+      };
+    }
+    const beforeText = editor.document.getText();
+    try {
+      const commandArgs = this.coerceCommandArgs(action.args);
+      await vscode.commands.executeCommand(action.command, ...commandArgs);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return { success: false, type: 'vscode', stderr: message, command: action.command, args: this.toStringArgs(action.args) };
+    }
+    const afterText = editor.document.getText();
+    const review = this.registerAutoEditReview(action, editor.document, beforeText, afterText);
+    return {
+      success: true,
+      type: 'vscode',
+      stdout: 'VS Code command executed.',
+      command: action.command,
+      args: this.toStringArgs(action.args),
+      autoEditReview: review
+    };
+  }
+
+  private async applySnippetReplacement(action: LucidActionPayload): Promise<ActionExecutionResult> {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor) {
+      return {
+        success: false,
+        type: 'vscode',
+        stderr: 'Open a text editor to apply this edit.',
+        command: action.command,
+        args: this.toStringArgs(action.args),
+        suggestions: ['Open the target file in VS Code before running this action.']
+      };
+    }
+    const replaceArgs = this.parseReplaceArgs(action.args);
+    const snippet = replaceArgs.snippet;
+    if (!snippet || !snippet.trim()) {
+      return {
+        success: false,
+        type: 'vscode',
+        stderr: 'editor.action.replace requires a snippet argument.',
+        command: action.command,
+        args: this.toStringArgs(action.args),
+        suggestions: ['Ensure the first argument includes the desired replacement text (string or { "snippet": "..." }).']
+      };
+    }
+
+    const snippetString = new vscode.SnippetString(snippet);
+    const targetedSelections = editor.selections?.filter(sel => sel && !sel.isEmpty) || [];
+    const beforeText = editor.document.getText();
+    let applied = false;
+
+    if (targetedSelections.length > 0) {
+      applied = await editor.insertSnippet(snippetString, targetedSelections);
+    } else if (replaceArgs.target) {
+      const range = this.findTargetRange(editor.document, replaceArgs.target);
+      if (!range) {
+        return {
+          success: false,
+          type: 'vscode',
+          stderr: 'Unable to find the target text to replace.',
+          command: action.command,
+          args: this.toStringArgs(action.args),
+          suggestions: ['Double-check the "target" text in the action JSON matches the document exactly (including spacing).']
+        };
+      }
+      applied = await editor.insertSnippet(snippetString, range);
+    } else {
+      return {
+        success: false,
+        type: 'vscode',
+        stderr: 'No selection or target text provided for editor.action.replace.',
+        command: action.command,
+        args: this.toStringArgs(action.args),
+        suggestions: [
+          'Include a {"target":"...","snippet":"..."} object in the action args so Lucid knows which text to replace.',
+          'Alternatively, select the code you want to replace before triggering the action.'
+        ]
+      };
+    }
+
+    if (!applied) {
+      return {
+        success: false,
+        type: 'vscode',
+        stderr: 'Failed to replace text in the active editor.',
+        command: action.command,
+        args: this.toStringArgs(action.args),
+        suggestions: ['Open the target file in VS Code before running this action.', 'Select the lines you want to replace, or leave the editor focused to replace the full document.']
+      };
+    }
+
+    const afterText = editor.document.getText();
+    const review = this.registerAutoEditReview(action, editor.document, beforeText, afterText);
+    return {
+      success: true,
+      type: 'vscode',
+      stdout: 'Replacement snippet applied to the active editor.',
+      command: action.command,
+      args: this.toStringArgs(action.args),
+      autoEditReview: review
+    };
+  }
+
+  private describeTerminalFileEditViolation(action: LucidActionPayload, command: string, args: string[]): string | undefined {
+    const normalizedCmd = command.trim().toLowerCase();
+    const argsJoined = args.join(' ').toLowerCase();
+    const description = `${action.description || ''} ${action.text || ''}`.toLowerCase();
+    const editVerbs = ['edit', 'replace', 'modify', 'remove', 'delete', 'insert', 'update', 'patch', 'refactor', 'change'];
+    const hasEditIntent = editVerbs.some((verb) => description.includes(verb));
+    const hasApplyPatch = normalizedCmd.includes('apply_patch') || argsJoined.includes('apply_patch');
+    if (normalizedCmd === 'sed' && args.some((arg) => arg.includes('-i'))) {
+      return 'Editing files via terminal sed commands is not allowed. Use VS Code snippet commands instead.';
+    }
+    if ((normalizedCmd === 'perl' || normalizedCmd === 'python' || normalizedCmd === 'python3' || normalizedCmd === 'ruby') && args.some((arg) => arg.includes('-i'))) {
+      return 'Editing files via terminal scripting languages (-i/in-place) is disabled. Provide a VS Code snippet action.';
+    }
+    if (hasApplyPatch) {
+      return 'Commands that invoke apply_patch/patch are blocked. Return the exact snippet using editor.action.insertSnippet/editor.action.replace.';
+    }
+    if (TERMINAL_FILE_EDIT_COMMANDS.has(normalizedCmd) && hasEditIntent) {
+      return 'This looks like a file edit expressed as a terminal command. File edits must be performed with VS Code actions, not shell commands.';
+    }
+    if ((normalizedCmd === 'bash' || normalizedCmd === 'sh' || normalizedCmd === 'zsh' || normalizedCmd === 'pwsh' || normalizedCmd === 'powershell') && hasEditIntent) {
+      return 'Shell scripts that modify files are blocked. Provide the desired changes through VS Code snippet commands.';
+    }
+    return undefined;
+  }
+
+  private parseReplaceArgs(args?: any[] | any): { snippet?: string; target?: string } {
+    if (Array.isArray(args) && args.length > 0) {
+      return this.parseReplaceArgs(args[0]);
+    }
+    if (!args) return {};
+    if (typeof args === 'string') {
+      return { snippet: args };
+    }
+    if (typeof args === 'object') {
+      const snippet = typeof (args as any).snippet === 'string'
+        ? (args as any).snippet
+        : typeof (args as any).text === 'string'
+          ? (args as any).text
+          : undefined;
+      const target = typeof (args as any).target === 'string'
+        ? (args as any).target
+        : typeof (args as any).before === 'string'
+          ? (args as any).before
+          : undefined;
+      return { snippet, target };
+    }
+    return {};
+  }
+
+  private findTargetRange(document: vscode.TextDocument, target: string): vscode.Range | undefined {
+    if (!target) return undefined;
+    const content = document.getText();
+    const normalizedTarget = target.replace(/\r\n/g, '\n');
+    const normalizedContent = content.replace(/\r\n/g, '\n');
+    const index = normalizedContent.indexOf(normalizedTarget);
+    if (index === -1) return undefined;
+    const start = document.positionAt(index);
+    const end = document.positionAt(index + normalizedTarget.length);
+    return new vscode.Range(start, end);
+  }
+
+  private registerAutoEditReview(
+    action: LucidActionPayload,
+    document: vscode.TextDocument,
+    beforeText: string,
+    afterText: string
+  ): AutoEditReviewDisplay | undefined {
+    if (!document) return undefined;
+    if (beforeText === afterText) return undefined;
+    const diff = this.buildCompactDiff(beforeText, afterText, document.fileName);
+    if (!diff || !diff.trim()) return undefined;
+    const diffStats = this.countDiffLines(diff);
+    const entry: PendingAutoEditReview = {
+      id: `autoedit-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      diff,
+      fileName: document.fileName ? path.basename(document.fileName) : undefined,
+      description: action.description,
+      documentUri: document.uri.toString(),
+      documentPath: document.uri.fsPath,
+      documentVersion: document.version,
+      languageId: document.languageId,
+      beforeText,
+      afterText,
+      timestamp: Date.now(),
+      status: 'pending',
+      path: document.uri.fsPath,
+      added: diffStats.added,
+      removed: diffStats.removed,
+      command: action.command
+    };
+    this.pendingAutoEditReviews.set(entry.id, entry);
+    return {
+      id: entry.id,
+      diff: entry.diff,
+      fileName: entry.fileName,
+      description: entry.description,
+      path: entry.path,
+      added: entry.added,
+      removed: entry.removed,
+      command: entry.command,
+      status: entry.status
+    };
+  }
+
+  private async writeDiffPreviewFiles(entry: PendingAutoEditReview): Promise<{ before: vscode.Uri; after: vscode.Uri }> {
+    const ctx = this.getExtensionContext?.();
+    let base = ctx?.globalStorageUri;
+    if (!base) {
+      base = vscode.Uri.file(path.join(os.tmpdir(), 'lucid-diff-previews'));
+    }
+    const dir = vscode.Uri.joinPath(base, 'diff-previews', entry.id);
+    try {
+      await vscode.workspace.fs.createDirectory(dir);
+    } catch (_) { }
+    const beforeUri = vscode.Uri.joinPath(dir, 'before.txt');
+    const afterUri = vscode.Uri.joinPath(dir, 'after.txt');
+    const encoder = new TextEncoder();
+    await Promise.all([
+      vscode.workspace.fs.writeFile(beforeUri, encoder.encode(entry.beforeText ?? '')),
+      vscode.workspace.fs.writeFile(afterUri, encoder.encode(entry.afterText ?? ''))
+    ]);
+    return { before: beforeUri, after: afterUri };
+  }
+
+  private async emitAutoEditWorkflowSummary(webview: vscode.Webview, reviewId: string): Promise<void> {
+    const entry = this.pendingAutoEditReviews.get(reviewId);
+    if (!entry) return;
+    try {
+      const fileStatus: 'scanned' | 'changed' | 'unchanged' | 'error' = entry.status === 'undone' ? 'unchanged' : 'changed';
+      const files = entry.documentPath
+        ? [{
+          path: entry.documentPath,
+          summary: entry.description || `Auto edit applied to ${entry.fileName || 'file'}`,
+          status: fileStatus,
+          diffId: entry.id
+        }]
+        : undefined;
+      await postWorkflowSummaryMessage({
+        webview,
+        summary: {
+          files,
+          diffs: [{
+            id: entry.id,
+            title: entry.fileName ? `Auto edit: ${entry.fileName}` : 'Auto edit diff',
+            summary: entry.description,
+            hunks: entry.diff,
+            keep: entry.status === 'kept',
+            undo: entry.status === 'undone',
+            added: entry.added,
+            removed: entry.removed,
+            path: entry.documentPath
+          }]
+        },
+        historyManager: this.historyManager,
+        options: { mode: 'agent' }
+      });
+    } catch (err) {
+      LucidLogger.error('emitAutoEditWorkflowSummary error', err);
+    }
+  }
+
+  private buildCompactDiff(beforeText: string, afterText: string, filePath?: string): string {
+    const beforeLines = this.splitLines(beforeText);
+    const afterLines = this.splitLines(afterText);
+    const ops = this.computeLineDiff(beforeLines, afterLines);
+    const lines: string[] = [];
+    const displayName = filePath ? path.basename(filePath) : 'document';
+    lines.push(`diff -- auto-edit ${displayName}`);
+    lines.push('--- before');
+    lines.push('+++ after');
+    let hasChange = false;
+    for (const op of ops) {
+      if (op.type === 'delete') {
+        lines.push(`- ${op.line}`);
+        hasChange = true;
+      } else if (op.type === 'insert') {
+        lines.push(`+ ${op.line}`);
+        hasChange = true;
+      } else if (op.type === 'equal') {
+        lines.push(`  ${op.line}`);
+      }
+    }
+    return hasChange ? lines.join('\n') : '';
+  }
+
+  private splitLines(text: string): string[] {
+    if (!text) return [''];
+    const normalized = text.replace(/\r\n/g, '\n');
+    return normalized.split('\n');
+  }
+
+  private computeLineDiff(beforeLines: string[], afterLines: string[]): { type: 'equal' | 'insert' | 'delete'; line: string }[] {
+    const m = beforeLines.length;
+    const n = afterLines.length;
+    const dp: number[][] = [];
+    for (let i = 0; i <= m; i++) {
+      dp[i] = new Array(n + 1).fill(0);
+    }
+    for (let i = m - 1; i >= 0; i--) {
+      for (let j = n - 1; j >= 0; j--) {
+        if (beforeLines[i] === afterLines[j]) {
+          dp[i][j] = dp[i + 1][j + 1] + 1;
+        } else {
+          dp[i][j] = Math.max(dp[i + 1][j], dp[i][j + 1]);
+        }
+      }
+    }
+    const ops: { type: 'equal' | 'insert' | 'delete'; line: string }[] = [];
+    let i = 0;
+    let j = 0;
+    while (i < m && j < n) {
+      if (beforeLines[i] === afterLines[j]) {
+        ops.push({ type: 'equal', line: beforeLines[i] });
+        i++;
+        j++;
+      } else if (dp[i + 1][j] >= dp[i][j + 1]) {
+        ops.push({ type: 'delete', line: beforeLines[i] });
+        i++;
+      } else {
+        ops.push({ type: 'insert', line: afterLines[j] });
+        j++;
+      }
+    }
+    while (i < m) {
+      ops.push({ type: 'delete', line: beforeLines[i++] });
+    }
+    while (j < n) {
+      ops.push({ type: 'insert', line: afterLines[j++] });
+    }
+    return ops;
+  }
+
+  private countDiffLines(diffText: string): { added: number; removed: number } {
+    const lines = diffText ? diffText.split('\n') : [];
+    let added = 0;
+    let removed = 0;
+    for (const line of lines) {
+      if (line.startsWith('+ ') || line.startsWith('+	') || (line.startsWith('+') && line.length > 1)) {
+        added++;
+      } else if (line.startsWith('- ') || line.startsWith('-	') || (line.startsWith('-') && line.length > 1)) {
+        removed++;
+      }
+    }
+    return { added, removed };
+  }
+
   private truncateForReview(text: string | undefined, max = 1000): string {
     if (!text) return '';
     if (text.length <= max) return text;
     return `${text.slice(0, max)}…`;
+  }
+
+  private postAutoEditReviewUpdate(webview: vscode.Webview, reviewId: string, status: 'kept' | 'undone' | 'error', message: string) {
+    try {
+      webview.postMessage({ type: 'autoEditReviewUpdate', reviewId, status, message });
+    } catch (err) {
+      LucidLogger.error('postAutoEditReviewUpdate error', err);
+    }
+  }
+
+  private findDocument(uriString: string): vscode.TextDocument | undefined {
+    try {
+      const uri = vscode.Uri.parse(uriString);
+      for (const doc of vscode.workspace.textDocuments) {
+        if (doc.uri.toString() === uri.toString()) return doc;
+      }
+      return undefined;
+    } catch (_) {
+      return undefined;
+    }
   }
 
   // TODO: burada output geri Ollamaya gittikten sonrasını düzenlemek lazım

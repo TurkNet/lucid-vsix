@@ -7,6 +7,7 @@ import { LucidLogger } from '../../common/log/logger';
 import { AskHandler } from './chat/askHandler';
 import { ActionHandler } from './chat/actionHandler';
 import { ChatHistoryManager, HistoryEntry } from './chat/historyManager';
+import { applySnippetToActiveEditor } from './utils/snippetActions';
 
 let extensionContext: vscode.ExtensionContext | undefined;
 let askHandler: AskHandler;
@@ -352,6 +353,27 @@ async function requestInlineCompletionFromOllama(prompt: string, signal?: AbortS
               return;
             }
 
+            if (msg.type === 'autoEditKeep') {
+              const reviewId = typeof msg.reviewId === 'string' ? msg.reviewId : '';
+              if (!reviewId) return;
+              await actionHandler.keepAutoEditReview(reviewId, webviewView.webview);
+              return;
+            }
+
+            if (msg.type === 'autoEditUndo') {
+              const reviewId = typeof msg.reviewId === 'string' ? msg.reviewId : '';
+              if (!reviewId) return;
+              await actionHandler.undoAutoEditReview(reviewId, webviewView.webview);
+              return;
+            }
+
+            if (msg.type === 'autoEditView') {
+              const reviewId = typeof msg.reviewId === 'string' ? msg.reviewId : '';
+              if (!reviewId) return;
+              await actionHandler.viewAutoEditReview(reviewId, webviewView.webview);
+              return;
+            }
+
             if (msg.type === 'replay') {
               const prompt: string = String(msg.prompt || '');
               if (!prompt) return;
@@ -374,6 +396,21 @@ async function requestInlineCompletionFromOllama(prompt: string, signal?: AbortS
                 LucidLogger.error('Replay request error', e);
                 webviewView.webview.postMessage({ type: 'error', text });
                 webviewView.webview.postMessage({ type: 'status', text: 'Request failed', level: 'error', streaming: false });
+              }
+              return;
+            }
+
+            if (msg.type === 'openUrl') {
+              const target = typeof msg.url === 'string' ? msg.url.trim() : '';
+              if (!target) return;
+              if (!/^https?:\/\//i.test(target)) {
+                LucidLogger.debug('Blocked non-http URL from webview', target);
+                return;
+              }
+              try {
+                await vscode.env.openExternal(vscode.Uri.parse(target));
+              } catch (err) {
+                LucidLogger.error('Failed to open external URL', err);
               }
               return;
             }
@@ -438,7 +475,8 @@ async function requestInlineCompletionFromOllama(prompt: string, signal?: AbortS
               options: {
                 sendMode: entry.mode,
                 actionPreview: entry.actionPreview ? { ...entry.actionPreview } : undefined,
-                actionOutput: entry.actionResult ? { ...entry.actionResult } : undefined
+                actionOutput: entry.actionResult ? { ...entry.actionResult } : undefined,
+                workflowSummary: entry.workflowSummary ? { ...entry.workflowSummary } : undefined
               }
             }));
             webviewView.webview.postMessage({ type: 'history', entries: historyPayload });
@@ -905,7 +943,9 @@ function buildActionInstructionPrompt(promptWithContext: string, originalPrompt:
     'You are Lucid, a VS Code automation agent. Produce ONE actionable plan per request.',
     'Always return a JSON object describing the plan in a fenced ```json``` block with the shape {"command": string, "args": array, "type": "terminal"|"vscode"|"clipboard", "description": string, "text"?: string}.',
     'If the action is a shell/terminal command, also include a fenced ```bash``` block containing ONLY the executable line so the UI can render it separately.',
-    'When editing files, prefer built-in VS Code commands such as editor.action.insertSnippet or workbench.action.files.save.',
+    'When editing or refactoring files, you MUST use VS Code commands (for example editor.action.insertSnippet/editor.action.replace/workbench.action.files.save) and set `"type": "vscode"`. Terminal commands such as sed/apply_patch/python/cat/tee used to modify files are strictly forbidden.',
+    'Terminal actions are reserved for running builds, linters, package managers, or other commands that cannot be performed via VS Code APIs. If a change can be done inside the editor, choose a VS Code command instead.',
+    'When using editor.action.replace include a JSON arg like {"target": "<existing text to replace>", "snippet": "<replacement>"} or provide an explicit editor selection. Never rely on replacing the entire file.',
     'For terminal actions the "command" must be the actual executable (for example "./set_version.sh" or "go") and "args" must contain only real shell arguments—never helper names like "terminal.run", "terminal.runSelectedText", "lucid.runTerminalCommand", or descriptive phrases.',
     'Never invent wrapper commands or editor helpers for shell executions. If you need to run a script, set the command to that script path and pass any flags or files through the "args" array.',
     'Never ask the user to run commands manually; provide the exact command and arguments yourself so the agent can execute them directly.'
@@ -920,45 +960,6 @@ function buildActionInstructionPrompt(promptWithContext: string, originalPrompt:
     'USER PROMPT:',
     originalPrompt
   ].join('\n\n');
-}
-
-async function applySnippetToActiveEditor(snippet: string, mode: 'replace' | 'insert'): Promise<boolean> {
-  if (!snippet || !snippet.length) return false;
-  const editor = vscode.window.activeTextEditor;
-  if (!editor) {
-    vscode.window.showInformationMessage('Open a text editor to apply this snippet.');
-    return false;
-  }
-
-  const snippetString = new vscode.SnippetString(snippet);
-  try {
-    if (mode === 'replace') {
-      const targeted = editor.selections?.filter(sel => sel && !sel.isEmpty) || [];
-      if (targeted.length > 0) {
-        return await editor.insertSnippet(snippetString, targeted);
-      }
-      const start = new vscode.Position(0, 0);
-      const lastLine = Math.max(0, editor.document.lineCount - 1);
-      const end = editor.document.lineCount > 0
-        ? editor.document.lineAt(lastLine).range.end
-        : start;
-      const fullRange = new vscode.Range(start, end);
-      return await editor.insertSnippet(snippetString, fullRange);
-    }
-
-    const positions = editor.selections?.map(sel => sel?.active).filter(Boolean) || [];
-    if (positions.length === 1 && positions[0]) {
-      return await editor.insertSnippet(snippetString, positions[0]);
-    }
-    if (positions.length > 1) {
-      return await editor.insertSnippet(snippetString, positions);
-    }
-    return await editor.insertSnippet(snippetString);
-  } catch (err) {
-    LucidLogger.error('applySnippetToActiveEditor error', err);
-    vscode.window.showErrorMessage('Failed to apply snippet. Check logs for details.');
-    return false;
-  }
 }
 
 export function deactivate() { }

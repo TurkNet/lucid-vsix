@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import * as crypto from 'crypto';
 import { LucidLogger } from '../../../common/log/logger';
+import type { WorkflowSummaryPayload } from './workflowSummary';
 
 export type HistoryRole = 'user' | 'assistant' | 'system' | 'error';
 export type HistoryMode = 'ask' | 'agent' | undefined;
@@ -34,6 +35,7 @@ export interface HistoryEntry {
   timestamp: number;
   actionPreview?: StoredActionPreview;
   actionResult?: StoredActionResult;
+  workflowSummary?: WorkflowSummaryPayload;
 }
 
 export class ChatHistoryManager {
@@ -64,8 +66,17 @@ export class ChatHistoryManager {
 
   async appendEntry(entry: HistoryEntry): Promise<void> {
     try {
-      if (!entry || !entry.text || !entry.text.trim()) return;
-      this.entries.push(entry);
+      if (!entry) return;
+      const hasText = typeof entry.text === 'string' && entry.text.trim().length > 0;
+      const hasAttachment = !!(entry.actionPreview || entry.actionResult || entry.workflowSummary);
+      if (!hasText && !hasAttachment) return;
+      let normalizedEntry = entry;
+      if (!hasText) {
+        normalizedEntry = { ...entry, text: '' };
+      } else if (entry.text !== entry.text.trim()) {
+        normalizedEntry = { ...entry, text: entry.text.trim() };
+      }
+      this.entries.push(normalizedEntry);
       if (this.entries.length > 500) this.entries = this.entries.slice(-500);
       if (!this.historyFile) return;
       const data = Buffer.from(JSON.stringify(this.entries, null, 2), 'utf8');
