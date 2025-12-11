@@ -68,6 +68,11 @@ interface RemediationPlanPayload {
   steps?: RemediationPlanStep[];
 }
 
+interface RemediationPlanResult {
+  plan?: RemediationPlanPayload;
+  rawText?: string;
+}
+
 interface TodoListItemPayload {
   id: string;
   title: string;
@@ -330,6 +335,16 @@ export class ActionHandler {
       normalized.command = parts.command;
       normalized.args = parts.args;
       normalized.type = 'terminal';
+    } else if (type === 'vscode') {
+      const lowered = (normalized.command || '').trim().toLowerCase();
+      if (lowered === 'vscode') {
+        const args = this.coerceCommandArgs(normalized.args);
+        const delegated = typeof args[0] === 'string' ? args.shift() : this.stringifyArg(args.shift());
+        if (delegated && delegated.length) {
+          normalized.command = delegated;
+          normalized.args = args;
+        }
+      }
     }
     return normalized;
   }
@@ -583,6 +598,9 @@ export class ActionHandler {
 
     if (kind === 'vscode') {
       const normalizedCommand = (action.command || '').trim().toLowerCase();
+      if (normalizedCommand === 'open') {
+        return await this.handleOpenFileCommand(action);
+      }
       const handled = await this.tryHandleEditorSnippetCommand(normalizedCommand, action);
       if (handled) {
         return handled;
@@ -867,6 +885,37 @@ export class ActionHandler {
       args: this.toStringArgs(action.args),
       autoEditReview: review
     };
+  }
+
+  private async handleOpenFileCommand(action: LucidActionPayload): Promise<ActionExecutionResult> {
+    try {
+      const targetPath = this.stringifyArg(action.args && action.args[0]);
+      let uri: vscode.Uri | undefined;
+      if (targetPath && targetPath.length) {
+        const normalized = path.isAbsolute(targetPath)
+          ? targetPath
+          : path.join(vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || process.cwd(), targetPath);
+        uri = vscode.Uri.file(normalized);
+      } else {
+        uri = vscode.window.activeTextEditor?.document.uri;
+      }
+      if (!uri) {
+        throw new Error('Specify a file path to open.');
+      }
+      const doc = await vscode.workspace.openTextDocument(uri);
+      await vscode.window.showTextDocument(doc, { preview: false });
+      return { success: true, type: 'vscode', stdout: `Opened ${uri.fsPath}`, command: action.command, args: this.toStringArgs(action.args) };
+    } catch (err) {
+      const stderr = err instanceof Error ? err.message : String(err);
+      return {
+        success: false,
+        type: 'vscode',
+        stderr,
+        command: action.command,
+        args: this.toStringArgs(action.args),
+        suggestions: ['Provide a workspace-relative or absolute file path.', 'Ensure the file exists and is readable.']
+      };
+    }
   }
 
   private async applySnippetReplacement(action: LucidActionPayload): Promise<ActionExecutionResult> {
@@ -1252,22 +1301,37 @@ export class ActionHandler {
       webview.postMessage({ type: 'append', text: intro, role: 'assistant' });
       await this.logHistory('assistant', intro, 'agent');
 
-      const plan = await this.requestRemediationPlan(action, result, originalPrompt, summary);
-      if (!plan) {
+      const planResult = await this.requestRemediationPlan(action, result, originalPrompt, summary);
+      if (!planResult) {
         const fallback = 'Otomatik çözüm önerileri alınamadı.';
         webview.postMessage({ type: 'append', text: fallback, role: 'assistant' });
         await this.logHistory('assistant', fallback, 'agent');
         return;
       }
 
-      const todoPayload = this.buildTodoListPayload(webview, plan, originalPrompt);
-      const planMessage = plan.summary || 'Çözüm önerileri hazır. Adımları sırayla uygulayın.';
-      if (todoPayload && todoPayload.items.length > 0) {
-        webview.postMessage({ type: 'append', text: planMessage, role: 'assistant', options: { todoList: todoPayload } });
-      } else {
-        webview.postMessage({ type: 'append', text: planMessage, role: 'assistant' });
+      if (planResult.plan) {
+        const plan = planResult.plan;
+        const todoPayload = this.buildTodoListPayload(webview, plan, originalPrompt);
+        const planMessage = plan.summary || 'Çözüm önerileri hazır. Adımları sırayla uygulayın.';
+        if (todoPayload && todoPayload.items.length > 0) {
+          webview.postMessage({ type: 'append', text: planMessage, role: 'assistant', options: { todoList: todoPayload } });
+        } else {
+          webview.postMessage({ type: 'append', text: planMessage, role: 'assistant' });
+        }
+        await this.logHistory('assistant', planMessage, 'agent');
+        return;
       }
-      await this.logHistory('assistant', planMessage, 'agent');
+
+      if (planResult.rawText) {
+        const manual = `Otomatik planparse edilemedi. Model cevabı:\n\n${planResult.rawText}`;
+        webview.postMessage({ type: 'append', text: manual, role: 'assistant' });
+        await this.logHistory('assistant', manual, 'agent');
+        return;
+      }
+
+      const fallback = 'Otomatik çözüm önerileri alınamadı.';
+      webview.postMessage({ type: 'append', text: fallback, role: 'assistant' });
+      await this.logHistory('assistant', fallback, 'agent');
     } catch (err) {
       LucidLogger.error('sendActionReviewToOllama error', err);
     }
@@ -1278,7 +1342,7 @@ export class ActionHandler {
     result: ActionExecutionResult,
     originalPrompt: string,
     summary: string
-  ): Promise<RemediationPlanPayload | undefined> {
+  ): Promise<RemediationPlanResult | undefined> {
     try {
       const endpoint = LucidConfig.getEndpoint();
       const model = LucidConfig.getModelName();
@@ -1360,14 +1424,11 @@ export class ActionHandler {
       }
 
       const normalized = this.normalizeResponseText(bodyText) || bodyText;
-      try {
-        const parsed = JSON.parse(normalized);
-        if (parsed && Array.isArray(parsed.steps) && parsed.steps.length > 0) {
-          return parsed as RemediationPlanPayload;
-        }
-      } catch (parseErr) {
-        LucidLogger.error('Failed to parse remediation plan response', parseErr);
+      const parsedPlan = this.tryParseRemediationPlanJson(normalized);
+      if (parsedPlan) {
+        return { plan: parsedPlan };
       }
+      return { rawText: normalized };
     } catch (err) {
       LucidLogger.error('requestRemediationPlan error', err);
     }
@@ -1441,6 +1502,37 @@ export class ActionHandler {
     }
 
     return payload;
+  }
+
+  private tryParseRemediationPlanJson(text: string): RemediationPlanPayload | undefined {
+    if (!text) return undefined;
+    const attempts: string[] = [];
+    const trimmed = text.trim();
+    if (trimmed) attempts.push(trimmed);
+
+    const fenceRegex = /```(?:json)?\s*([\s\S]*?)```/gi;
+    let match: RegExpExecArray | null;
+    while ((match = fenceRegex.exec(text)) !== null) {
+      if (match[1]) attempts.push(match[1]);
+    }
+
+    const firstBrace = text.indexOf('{');
+    const lastBrace = text.lastIndexOf('}');
+    if (firstBrace !== -1 && lastBrace > firstBrace) {
+      attempts.push(text.slice(firstBrace, lastBrace + 1));
+    }
+
+    for (const candidate of attempts) {
+      try {
+        const parsed = JSON.parse(candidate);
+        if (parsed && typeof parsed === 'object') {
+          return parsed as RemediationPlanPayload;
+        }
+      } catch (_) {
+        continue;
+      }
+    }
+    return undefined;
   }
 
   private coerceCommandArgs(args?: any[] | any): any[] {
