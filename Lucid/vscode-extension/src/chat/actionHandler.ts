@@ -15,6 +15,8 @@ export interface LucidActionPayload {
   type?: 'vscode' | 'terminal' | 'clipboard';
   text?: string;
   description?: string;
+  stepId?: string;
+  targetPath?: string;
 }
 
 interface ActionExecutionResult {
@@ -80,12 +82,45 @@ interface TodoListItemPayload {
   detail?: string;
   snippet?: string;
   actionId?: string;
+  status?: string;
 }
 
 interface TodoListWebviewPayload {
+  id?: string;
   title?: string;
   description?: string;
   items: TodoListItemPayload[];
+}
+
+type PlanStepStatus = 'pending' | 'active' | 'done' | 'blocked';
+
+interface ModelPlanStep {
+  id?: string;
+  title?: string;
+  description?: string;
+  status?: PlanStepStatus;
+  action?: LucidActionPayload;
+  path?: string;
+}
+
+interface ModelActionEnvelope {
+  summary?: string;
+  plan?: ModelPlanStep[];
+  action?: LucidActionPayload;
+  nextAction?: LucidActionPayload;
+  done?: boolean;
+  finalSummary?: string;
+  alternatives?: string[];
+  todoTitle?: string;
+  todoDescription?: string;
+}
+
+interface PlanStateEntry {
+  id: string;
+  title?: string;
+  description?: string;
+  steps: ModelPlanStep[];
+  lastSignature?: string;
 }
 
 interface AutoEditReviewDisplay {
@@ -149,6 +184,8 @@ export class ActionHandler {
   private readonly pendingActions = new Map<string, PendingActionEntry>();
   private readonly pendingAutoEditReviews = new Map<string, PendingAutoEditReview>();
   private readonly maxAutoContinueDepth = 5;
+  private readonly planStateByWebview = new WeakMap<vscode.Webview, PlanStateEntry>();
+  private readonly attachedPathsByWebview = new WeakMap<vscode.Webview, string[]>();
 
   constructor(
     private readonly askHandler: AskHandler,
@@ -166,20 +203,25 @@ export class ActionHandler {
         return;
       }
 
-      const actionPayload = this.extractActionPayloadFromText(responseText);
+      const envelope = this.parseModelActionEnvelope(responseText);
+      await this.presentActionEnvelope(webview, envelope, 'agent');
+      if (envelope?.done) {
+        return;
+      }
+      const actionPayload = envelope?.action || envelope?.nextAction || this.extractActionPayloadFromText(responseText);
       if (!actionPayload) {
         webview.postMessage({ type: 'append', text: 'No executable action block was found in the response.', role: 'system' });
         await this.logHistory('system', 'No executable action block was found in the response.', 'agent');
         return;
       }
-
+      const preparedAction = this.enrichActionPayloadWithPlanContext(webview, actionPayload) || actionPayload;
       const promptForReview = originalPrompt || finalPrompt;
-      if (this.shouldAutoExecuteVsCodeAction(actionPayload)) {
-        await this.executeAutoVsCodeAction(webview, actionPayload, promptForReview, 0);
+      if (this.shouldAutoExecuteVsCodeAction(preparedAction)) {
+        await this.executeAutoVsCodeAction(webview, preparedAction, promptForReview, 0);
         return;
       }
-      const actionId = this.registerPendingAction(webview, actionPayload, promptForReview);
-      const preview = this.buildActionPreview(actionId, actionPayload);
+      const actionId = this.registerPendingAction(webview, preparedAction, promptForReview);
+      const preview = this.buildActionPreview(actionId, preparedAction);
       webview.postMessage({
         type: 'append',
         text: preview.message,
@@ -214,10 +256,18 @@ export class ActionHandler {
 
   private async executeAutoVsCodeAction(webview: vscode.Webview, payload: LucidActionPayload, originalPrompt: string, depth = 0): Promise<void> {
     webview.postMessage({ type: 'status', text: 'Applying VS Code action…', streaming: false });
+    const preparedPayload = this.enrichActionPayloadWithPlanContext(webview, payload) || payload;
+    this.updatePlanStepStatusForAction(webview, preparedPayload, 'active');
     try {
-      const executionResult = await this.executeActionPayload(payload);
-      const summary = this.buildActionSummary(payload, executionResult);
-      const prefix = `VS Code action ${payload.command} was applied automatically.`;
+      const docReady = await this.ensureDocumentForAction(webview, preparedPayload);
+      if (!docReady) {
+        this.updatePlanStepStatusForAction(webview, preparedPayload, 'blocked');
+        this.notifyMissingEditor(webview);
+        return;
+      }
+      const executionResult = await this.executeActionPayload(preparedPayload);
+      const summary = this.buildActionSummary(preparedPayload, executionResult);
+      const prefix = `VS Code action ${preparedPayload.command} was applied automatically.`;
       const message = summary ? `${prefix}\n\n${summary}` : prefix;
       const role: HistoryRole = executionResult.success ? 'assistant' : 'error';
       const options = executionResult.autoEditReview ? { autoEditReview: executionResult.autoEditReview } : undefined;
@@ -226,11 +276,12 @@ export class ActionHandler {
       if (executionResult.autoEditReview) {
         await this.emitAutoEditWorkflowSummary(webview, executionResult.autoEditReview.id);
       }
+      this.updatePlanStepStatusForAction(webview, preparedPayload, executionResult.success ? 'done' : 'blocked');
       if (executionResult.success) {
         await this.tryAutoContinueRecursiveAction({
           webview,
           originalPrompt,
-          lastPayload: payload,
+          lastPayload: preparedPayload,
           executionResult,
           summary,
           depth
@@ -242,6 +293,7 @@ export class ActionHandler {
       webview.postMessage({ type: 'append', text, role: 'error' });
       LucidLogger.error('executeAutoVsCodeAction error', err);
       await this.logHistory('error', text, 'agent');
+      this.updatePlanStepStatusForAction(webview, preparedPayload, 'blocked');
     } finally {
       webview.postMessage({ type: 'status', text: 'Idle', streaming: false });
     }
@@ -331,6 +383,140 @@ export class ActionHandler {
     return this.tryParseActionJson(snippet);
   }
 
+  private parseModelActionEnvelope(text: string): ModelActionEnvelope | undefined {
+    if (!text) return undefined;
+    const snippets = this.collectJsonSnippets(text);
+    for (const snippet of snippets) {
+      const env = this.tryParseEnvelopeSnippet(snippet);
+      if (env) return env;
+    }
+    return undefined;
+  }
+
+  private collectJsonSnippets(text: string): string[] {
+    const snippets: string[] = [];
+    const fenceRegex = /```(?:json)?\s*([\s\S]*?)```/gi;
+    let match: RegExpExecArray | null;
+    while ((match = fenceRegex.exec(text)) !== null) {
+      snippets.push(match[1]);
+    }
+    if (snippets.length === 0) {
+      const marker = text.indexOf('{');
+      if (marker !== -1) {
+        let braceDepth = 0;
+        let snippet = '';
+        for (let i = marker; i < text.length; i++) {
+          const ch = text[i];
+          snippet += ch;
+          if (ch === '{') braceDepth++;
+          else if (ch === '}') {
+            braceDepth--;
+            if (braceDepth === 0) break;
+          }
+        }
+        if (snippet.trim().startsWith('{')) {
+          snippets.push(snippet);
+        }
+      }
+    }
+    return snippets;
+  }
+
+  private tryParseEnvelopeSnippet(snippet: string): ModelActionEnvelope | undefined {
+    try {
+      const parsed = JSON.parse(snippet.trim());
+      return this.normalizeActionEnvelope(parsed);
+    } catch {
+      return undefined;
+    }
+  }
+
+  private normalizeActionEnvelope(parsed: any): ModelActionEnvelope | undefined {
+    if (!parsed || typeof parsed !== 'object') {
+      if (parsed && typeof parsed === 'object' && typeof parsed.command === 'string') {
+        return { action: this.normalizeParsedPayload(parsed as LucidActionPayload) };
+      }
+      return undefined;
+    }
+    if (Array.isArray(parsed)) return undefined;
+
+    const envelope: ModelActionEnvelope = {};
+    if (typeof parsed.summary === 'string') envelope.summary = parsed.summary;
+    else if (typeof parsed.overview === 'string') envelope.summary = parsed.overview;
+    if (typeof parsed.todoTitle === 'string') envelope.todoTitle = parsed.todoTitle;
+    if (typeof parsed.todoDescription === 'string') envelope.todoDescription = parsed.todoDescription;
+
+    const planSource = Array.isArray(parsed.plan)
+      ? parsed.plan
+      : Array.isArray(parsed.todos)
+        ? parsed.todos
+        : Array.isArray(parsed.steps)
+          ? parsed.steps
+          : undefined;
+    if (planSource) {
+      const steps = planSource
+        .map((step: any, index: number) => this.normalizePlanStep(step, index))
+        .filter((step: ModelPlanStep | undefined): step is ModelPlanStep => !!step);
+      if (steps.length) envelope.plan = steps;
+    }
+
+    const finalSummary = parsed.finalSummary || parsed.result;
+    if (typeof finalSummary === 'string') envelope.finalSummary = finalSummary;
+    if (Array.isArray(parsed.alternatives)) {
+      envelope.alternatives = parsed.alternatives.map((alt: any) => String(alt)).filter(Boolean);
+    }
+
+    const statusField = parsed.status || parsed.state;
+    if (typeof statusField === 'string') {
+      envelope.done = statusField.trim().toLowerCase() === 'done' || statusField.trim().toLowerCase() === 'complete';
+    } else if (typeof parsed.done === 'boolean') {
+      envelope.done = parsed.done;
+    } else if (typeof parsed.completed === 'boolean') {
+      envelope.done = parsed.completed;
+    }
+
+    const actionCandidate = parsed.action || parsed.nextAction || parsed.nextStep || (parsed.command ? parsed : undefined);
+    const normalizedAction = this.normalizeActionCandidate(actionCandidate);
+    if (normalizedAction) {
+      envelope.action = normalizedAction;
+    }
+
+    if (!envelope.summary && !envelope.plan && !envelope.finalSummary && !envelope.alternatives && !envelope.action && typeof parsed.command !== 'string') {
+      return undefined;
+    }
+    return envelope;
+  }
+
+  private normalizePlanStep(step: any, index = 0): ModelPlanStep | undefined {
+    if (!step || typeof step !== 'object') return undefined;
+    if (Array.isArray(step)) return undefined;
+    const planStep: ModelPlanStep = {};
+    if (typeof step.id === 'string' && step.id.trim().length) {
+      planStep.id = step.id.trim();
+    } else {
+      planStep.id = `plan-step-${index + 1}`;
+    }
+    if (typeof step.title === 'string') planStep.title = step.title;
+    if (typeof step.description === 'string') planStep.description = step.description;
+    else if (typeof step.detail === 'string') planStep.description = step.detail;
+    if (typeof step.path === 'string') planStep.path = this.normalizePlanPath(step.path);
+    const statusSource = this.normalizePlanStatus(step.status || step.state || step.result);
+    planStep.status = statusSource || 'pending';
+    const actionCandidate = step.action || step.nextAction;
+    const normalizedAction = this.normalizeActionCandidate(actionCandidate);
+    if (normalizedAction) planStep.action = normalizedAction;
+    if (!planStep.title && !planStep.description && !planStep.action && !planStep.path) return undefined;
+    return planStep;
+  }
+
+  private normalizeActionCandidate(candidate: any): LucidActionPayload | undefined {
+    if (!candidate || typeof candidate !== 'object') return undefined;
+    if (typeof candidate.command === 'string') {
+      return this.normalizeParsedPayload(candidate as LucidActionPayload);
+    }
+    return undefined;
+  }
+
   private tryParseActionJson(snippet: string): LucidActionPayload | undefined {
     try {
       const parsed = JSON.parse(snippet.trim());
@@ -371,6 +557,381 @@ export class ActionHandler {
     return id;
   }
 
+  private async presentActionEnvelope(
+    webview: vscode.Webview,
+    envelope: ModelActionEnvelope | undefined,
+    mode: 'ask' | 'agent' | undefined
+  ): Promise<void> {
+    if (!envelope) return;
+    const hasPlan = Array.isArray(envelope.plan) && envelope.plan.length > 0;
+    if (hasPlan) {
+      const todoPayload = this.updatePlanStateFromEnvelope(webview, envelope);
+      if (todoPayload) {
+        webview.postMessage({
+          type: 'append',
+          text: '',
+          role: 'assistant',
+          options: { todoList: todoPayload }
+        });
+      }
+    } else if (envelope.summary && envelope.summary.trim()) {
+      const text = envelope.summary.trim();
+      webview.postMessage({ type: 'append', text, role: 'assistant' });
+      await this.logHistory('assistant', text, mode);
+    }
+    if (envelope.finalSummary || (envelope.alternatives && envelope.alternatives.length)) {
+      const lines: string[] = [];
+      if (envelope.finalSummary) lines.push(envelope.finalSummary);
+      if (envelope.alternatives && envelope.alternatives.length) {
+        lines.push('Alternatif çözümler:');
+        for (const alt of envelope.alternatives) {
+          lines.push(`- ${alt}`);
+        }
+      }
+      const text = lines.join('\n');
+      webview.postMessage({ type: 'append', text, role: 'assistant' });
+      await this.logHistory('assistant', text, mode);
+    }
+  }
+
+  private updatePlanStateFromEnvelope(webview: vscode.Webview, envelope: ModelActionEnvelope): TodoListWebviewPayload | undefined {
+    if (!envelope.plan || envelope.plan.length === 0) return undefined;
+    const previous = this.planStateByWebview.get(webview);
+    const steps = envelope.plan.map(step => ({ ...step }));
+    const entry: PlanStateEntry = {
+      id: previous?.id || `plan-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      title: envelope.todoTitle || previous?.title || 'Plan ve adımlar',
+      description: typeof envelope.todoDescription === 'string' ? envelope.todoDescription : previous?.description,
+      steps
+    };
+    const signature = this.computePlanSignature(entry);
+    if (previous && previous.lastSignature === signature) {
+      entry.lastSignature = signature;
+      this.planStateByWebview.set(webview, entry);
+      return undefined;
+    }
+    entry.lastSignature = signature;
+    this.planStateByWebview.set(webview, entry);
+    return this.buildTodoPayloadFromPlanEntry(entry);
+  }
+
+  private buildTodoPayloadFromPlanEntry(entry: PlanStateEntry): TodoListWebviewPayload | undefined {
+    if (!entry.steps || entry.steps.length === 0) return undefined;
+    const items: TodoListItemPayload[] = [];
+    for (let i = 0; i < entry.steps.length; i++) {
+      const step = entry.steps[i];
+      if (!step) continue;
+      const details: string[] = [];
+      if (step.description) details.push(step.description);
+      if (step.path) details.push(`Dosya: ${step.path}`);
+      items.push({
+        id: step.id || `plan-step-${i + 1}`,
+        title: step.title || `Adım ${i + 1}`,
+        detail: details.length ? details.join('\n') : undefined,
+        status: step.status
+      });
+    }
+    if (!items.length) return undefined;
+    return {
+      id: entry.id,
+      title: entry.title || 'Plan ve adımlar',
+      description: entry.description,
+      items
+    };
+  }
+
+  private computePlanSignature(entry: PlanStateEntry): string {
+    const serializable = {
+      id: entry.id,
+      title: entry.title,
+      description: entry.description,
+      steps: entry.steps.map(step => ({
+        id: step.id,
+        title: step.title,
+        description: step.description,
+        status: step.status,
+        path: step.path
+      }))
+    };
+    return JSON.stringify(serializable);
+  }
+
+  private normalizePlanPath(pathHint: string): string {
+    return pathHint.replace(/\\/g, '/').trim();
+  }
+
+  private normalizePlanStatus(status: string | PlanStepStatus | undefined): PlanStepStatus | undefined {
+    if (!status) return undefined;
+    const value = String(status).trim().toLowerCase();
+    if (!value) return undefined;
+    if (value === 'pending' || value === 'todo' || value === 'queued') return 'pending';
+    if (value === 'active' || value === 'in_progress' || value === 'working') return 'active';
+    if (value === 'done' || value === 'complete' || value === 'completed' || value === 'success') return 'done';
+    if (value === 'blocked' || value === 'failed' || value === 'error') return 'blocked';
+    return 'pending';
+  }
+
+  private renderPlanState(webview: vscode.Webview, entry: PlanStateEntry | undefined): void {
+    if (!entry) return;
+    const payload = this.buildTodoPayloadFromPlanEntry(entry);
+    if (!payload) return;
+    entry.lastSignature = this.computePlanSignature(entry);
+    this.planStateByWebview.set(webview, entry);
+    webview.postMessage({
+      type: 'append',
+      text: '',
+      role: 'assistant',
+      options: { todoList: payload }
+    });
+  }
+
+  private findPlanStepForAction(entry: PlanStateEntry | undefined, payload: LucidActionPayload | undefined): { step: ModelPlanStep; index: number } | undefined {
+    if (!entry || !payload) return undefined;
+    const steps = entry.steps || [];
+    const stepId = payload.stepId;
+    if (stepId) {
+      const idx = steps.findIndex(step => step?.id === stepId);
+      if (idx !== -1) return { step: steps[idx], index: idx };
+    }
+    const actionPath = this.extractActionPath(payload);
+    if (actionPath) {
+      const idx = steps.findIndex(step => step?.path && this.actionPathsMatch(step.path, actionPath));
+      if (idx !== -1) return { step: steps[idx], index: idx };
+    }
+    const activeIdx = steps.findIndex(step => step?.status === 'active');
+    if (activeIdx !== -1) return { step: steps[activeIdx], index: activeIdx };
+    const pendingIdx = steps.findIndex(step => step?.status === 'pending');
+    if (pendingIdx !== -1) return { step: steps[pendingIdx], index: pendingIdx };
+    return undefined;
+  }
+
+  private actionPathsMatch(stepPath: string, actionPath: string): boolean {
+    if (!stepPath || !actionPath) return false;
+    const normalizedStep = this.normalizePlanPath(stepPath);
+    const normalizedAction = this.normalizePlanPath(actionPath);
+    if (normalizedStep === normalizedAction) return true;
+    const baseStep = path.basename(normalizedStep);
+    const baseAction = path.basename(normalizedAction);
+    return !!baseStep && !!baseAction && baseStep === baseAction;
+  }
+
+  private extractActionPath(payload: LucidActionPayload | undefined): string | undefined {
+    if (!payload) return undefined;
+    if (typeof payload.targetPath === 'string' && payload.targetPath.trim().length) {
+      return this.normalizePlanPath(payload.targetPath);
+    }
+    const args = Array.isArray(payload.args) ? payload.args : payload.args ? [payload.args] : [];
+    if (!args.length) return undefined;
+    const primary = args[0];
+    if (primary && typeof primary === 'object') {
+      const pathCandidate = (primary as any).path ?? (primary as any).file ?? (primary as any).filePath;
+      if (typeof pathCandidate === 'string' && pathCandidate.trim().length) {
+        return this.normalizePlanPath(pathCandidate);
+      }
+    }
+    return undefined;
+  }
+
+  private enrichActionPayloadWithPlanContext(webview: vscode.Webview, payload: LucidActionPayload | undefined): LucidActionPayload | undefined {
+    if (!payload) return payload;
+    const planEntry = this.planStateByWebview.get(webview);
+    const match = this.findPlanStepForAction(planEntry, payload);
+    if (match) {
+      if (match.step.id && !payload.stepId) {
+        payload.stepId = match.step.id;
+      }
+      this.applyPlanPathToActionPayload(payload, match.step);
+      return payload;
+    }
+    this.applyAttachmentPathFallback(webview, payload);
+    return payload;
+  }
+
+  private applyPlanPathToActionPayload(payload: LucidActionPayload, step: ModelPlanStep | undefined): void {
+    if (!step || !step.path || !step.path.trim()) return;
+    if (!payload.targetPath) {
+      payload.targetPath = step.path;
+    }
+    const command = (payload.command || '').trim().toLowerCase();
+    if (command === 'lucid.applymodeledit') {
+      const argObject = this.ensureModelEditArgObject(payload);
+      if (typeof argObject.path !== 'string' || !argObject.path.length) {
+        argObject.path = step.path;
+      }
+    }
+  }
+
+  private ensureModelEditArgObject(payload: LucidActionPayload): Record<string, any> {
+    if (!Array.isArray(payload.args)) {
+      if (typeof payload.args === 'undefined') {
+        payload.args = [{}];
+      } else {
+        payload.args = [payload.args];
+      }
+    }
+    if (!payload.args.length || typeof payload.args[0] !== 'object' || Array.isArray(payload.args[0])) {
+      const original = payload.args[0];
+      const replacement: Record<string, any> = {};
+      if (typeof original === 'string' && original.trim().length) {
+        replacement.content = original;
+      }
+      payload.args[0] = replacement;
+    }
+    return payload.args[0] as Record<string, any>;
+  }
+
+  private applyAttachmentPathFallback(webview: vscode.Webview, payload: LucidActionPayload): void {
+    const existingPath = this.extractActionPath(payload);
+    if (existingPath) return;
+    const attachment = this.pickAttachmentPath(webview);
+    if (!attachment) return;
+    this.applyAttachmentPathToActionPayload(payload, attachment);
+  }
+
+  private applyAttachmentPathToActionPayload(payload: LucidActionPayload, attachmentPath: string): void {
+    if (!attachmentPath || !attachmentPath.trim()) return;
+    if (!payload.targetPath) {
+      payload.targetPath = attachmentPath;
+    }
+    const command = (payload.command || '').trim().toLowerCase();
+    if (command === 'lucid.applymodeledit') {
+      const argObject = this.ensureModelEditArgObject(payload);
+      if (typeof argObject.path !== 'string' || !argObject.path.length) {
+        argObject.path = attachmentPath;
+      }
+    }
+  }
+
+  private updatePlanStepStatusForAction(webview: vscode.Webview, payload: LucidActionPayload | undefined, status: PlanStepStatus): void {
+    if (!payload) return;
+    const entry = this.planStateByWebview.get(webview);
+    const match = this.findPlanStepForAction(entry, payload);
+    if (!entry || !match) return;
+    if (match.step.status === status) return;
+    match.step.status = status;
+    this.renderPlanState(webview, entry);
+  }
+
+  private describePlanContext(entry: PlanStateEntry | undefined): string {
+    if (!entry || !entry.steps || entry.steps.length === 0) {
+      return 'Plan durumu: hiç adım yok.';
+    }
+    const lines = entry.steps.map((step, idx) => {
+      const status = (step.status || 'pending').toUpperCase();
+      const title = step.title || `Adım ${idx + 1}`;
+      const idPart = step.id ? ` (#${step.id})` : '';
+      const pathPart = step.path ? ` – ${step.path}` : '';
+      return `[${status}] ${title}${idPart}${pathPart}`;
+    });
+    return `Plan durumu:\n${lines.join('\n')}`;
+  }
+
+  private findNextPlanStep(entry: PlanStateEntry | undefined, completedPath?: string): ModelPlanStep | undefined {
+    if (!entry || !entry.steps || entry.steps.length === 0) return undefined;
+    if (completedPath) {
+      const completedIdx = entry.steps.findIndex(step => step?.path && this.actionPathsMatch(step.path, completedPath));
+      if (completedIdx !== -1) {
+        for (let i = completedIdx + 1; i < entry.steps.length; i++) {
+          const candidate = entry.steps[i];
+          if (candidate && candidate.status !== 'done') {
+            return candidate;
+          }
+        }
+      }
+    }
+    return entry.steps.find(step => step?.status === 'pending') || entry.steps.find(step => step?.status === 'active');
+  }
+
+  private async readPlanStepFile(step: ModelPlanStep | undefined): Promise<{ path: string; content: string } | undefined> {
+    if (!step || !step.path) return undefined;
+    const candidates = this.resolveCandidatePaths(step.path);
+    for (const candidate of candidates) {
+      try {
+        const uri = vscode.Uri.file(candidate);
+        const bytes = await vscode.workspace.fs.readFile(uri);
+        const content = Buffer.from(bytes).toString('utf8');
+        return { path: candidate, content };
+      } catch {
+        continue;
+      }
+    }
+    return undefined;
+  }
+
+  private async ensureDocumentForAction(webview: vscode.Webview, payload: LucidActionPayload): Promise<boolean> {
+    try {
+      let pathHint = this.extractActionPath(payload);
+      if (!pathHint) {
+        const entry = this.planStateByWebview.get(webview);
+        const match = this.findPlanStepForAction(entry, payload);
+        if (match?.step?.path) {
+          this.applyPlanPathToActionPayload(payload, match.step);
+          pathHint = match.step.path;
+        }
+      }
+      if (!pathHint) {
+        const attachment = this.pickAttachmentPath(webview);
+        if (attachment) {
+          this.applyAttachmentPathToActionPayload(payload, attachment);
+          pathHint = attachment;
+        }
+      }
+      if (pathHint && await this.openDocumentForPath(pathHint)) {
+        return true;
+      }
+      const editor = vscode.window.activeTextEditor;
+      if (editor?.document) {
+        await vscode.window.showTextDocument(editor.document, { preview: false });
+        return true;
+      }
+      return false;
+    } catch (err) {
+      LucidLogger.debug('ensureDocumentForAction failed', err);
+      return false;
+    }
+  }
+
+  private async openDocumentForPath(pathHint: string): Promise<boolean> {
+    const candidates = this.resolveCandidatePaths(pathHint);
+    if (!candidates.length) return false;
+    const active = vscode.window.activeTextEditor;
+    if (active) {
+      const activePath = path.normalize(active.document.uri.fsPath);
+      if (candidates.some(candidate => path.normalize(candidate) === activePath)) {
+        await vscode.window.showTextDocument(active.document, { preview: false });
+        return true;
+      }
+    }
+    for (const candidate of candidates) {
+      try {
+        const uri = vscode.Uri.file(candidate);
+        const doc = await vscode.workspace.openTextDocument(uri);
+        await vscode.window.showTextDocument(doc, { preview: false });
+        return true;
+      } catch {
+        continue;
+      }
+    }
+    return false;
+  }
+
+  private pickAttachmentPath(webview: vscode.Webview): string | undefined {
+    const attachments = this.getAttachedPaths(webview);
+    if (!attachments || !attachments.length) return undefined;
+    return attachments[0];
+  }
+
+  private getAttachedPaths(webview: vscode.Webview): string[] {
+    return this.attachedPathsByWebview.get(webview) || [];
+  }
+
+  private notifyMissingEditor(webview: vscode.Webview): void {
+    const text = 'Kod düzenlemesi yapabilmek için açık bir dosya bulamadım. Lütfen düzenlemek istediğiniz dosyayı editörde açın ya da isteğe dosya yolu ekleyin.';
+    webview.postMessage({ type: 'append', text, role: 'system' });
+    void this.logHistory('system', text, 'agent');
+    this.renderPlanState(webview, this.planStateByWebview.get(webview));
+  }
+
   async runPendingAction(actionId: string, requestWebview: vscode.Webview): Promise<void> {
     const entry = this.pendingActions.get(actionId);
     if (!entry) {
@@ -382,9 +943,18 @@ export class ActionHandler {
     const targetView = entry.webview;
     targetView.postMessage({ type: 'status', text: 'Executing action…', streaming: false });
     try {
-      const executionResult = await this.executeActionPayload(entry.payload);
-      const summary = this.buildActionSummary(entry.payload, executionResult);
-      const storedResult = this.buildStoredActionResult(entry.payload, executionResult);
+      const enrichedPayload = this.enrichActionPayloadWithPlanContext(targetView, entry.payload) || entry.payload;
+      entry.payload = enrichedPayload;
+      this.updatePlanStepStatusForAction(targetView, enrichedPayload, 'active');
+      const docReady = await this.ensureDocumentForAction(targetView, enrichedPayload);
+      if (!docReady) {
+        this.updatePlanStepStatusForAction(targetView, enrichedPayload, 'blocked');
+        this.notifyMissingEditor(targetView);
+        return;
+      }
+      const executionResult = await this.executeActionPayload(enrichedPayload);
+      const summary = this.buildActionSummary(enrichedPayload, executionResult);
+      const storedResult = this.buildStoredActionResult(enrichedPayload, executionResult);
       const optionsPayload: Record<string, any> = {};
       if (storedResult) optionsPayload.actionOutput = storedResult;
       if (executionResult.autoEditReview) optionsPayload.autoEditReview = executionResult.autoEditReview;
@@ -394,22 +964,24 @@ export class ActionHandler {
       if (executionResult.autoEditReview) {
         await this.emitAutoEditWorkflowSummary(targetView, executionResult.autoEditReview.id);
       }
+      this.updatePlanStepStatusForAction(targetView, enrichedPayload, executionResult.success ? 'done' : 'blocked');
       if (executionResult.success) {
         await this.tryAutoContinueRecursiveAction({
           webview: targetView,
           originalPrompt: entry.originalPrompt,
-          lastPayload: entry.payload,
+          lastPayload: enrichedPayload,
           executionResult,
           summary,
           depth: entry.depth
         });
       }
-      await this.sendActionReviewToOllama(targetView, entry.payload, executionResult, entry.originalPrompt, summary);
+      await this.sendActionReviewToOllama(targetView, enrichedPayload, executionResult, entry.originalPrompt, summary);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       targetView.postMessage({ type: 'append', text: `Action execution error: ${msg}`, role: 'error' });
       LucidLogger.error('runPendingAction error', err);
       await this.logHistory('error', `Action execution error: ${msg}`, 'agent');
+      this.updatePlanStepStatusForAction(targetView, entry.payload, 'blocked');
     } finally {
       targetView.postMessage({ type: 'status', text: 'Idle', streaming: false });
       this.pendingActions.delete(actionId);
@@ -422,6 +994,12 @@ export class ActionHandler {
         this.pendingActions.delete(id);
       }
     }
+    this.planStateByWebview.delete(webview);
+    this.attachedPathsByWebview.delete(webview);
+  }
+
+  updateAttachedPaths(webview: vscode.Webview, paths: string[]): void {
+    this.attachedPathsByWebview.set(webview, Array.isArray(paths) ? paths : []);
   }
 
   async keepAutoEditReview(reviewId: string, webview: vscode.Webview): Promise<void> {
@@ -1675,20 +2253,34 @@ export class ActionHandler {
     if (!reviewId) return;
     const reviewEntry = this.pendingAutoEditReviews.get(reviewId);
     if (!reviewEntry || !reviewEntry.afterText) return;
-    const followupPrompt = this.buildAutoContinuePrompt(params.originalPrompt, reviewEntry, params.summary, params.depth);
+    const followupPrompt = await this.buildAutoContinuePrompt({
+      webview: params.webview,
+      originalPrompt: params.originalPrompt,
+      reviewEntry,
+      lastSummary: params.summary,
+      depth: params.depth
+    });
     if (!followupPrompt) return;
 
     try {
       const responseText = await this.requestActionResponseFromOllama(params.webview, followupPrompt, false);
       if (!responseText || !responseText.trim()) return;
-      if (this.isDoneResponse(responseText)) {
+      const envelope = this.parseModelActionEnvelope(responseText);
+      await this.presentActionEnvelope(params.webview, envelope, 'agent');
+      if (envelope?.done) {
+        const doneText = envelope.finalSummary || 'Agent workflow completed automatically.';
+        params.webview.postMessage({ type: 'append', text: doneText, role: 'assistant' });
+        await this.logHistory('assistant', doneText, 'agent');
+        return;
+      }
+      if (!envelope && this.isDoneResponse(responseText)) {
         const doneMessage = 'Agent workflow completed automatically.';
         params.webview.postMessage({ type: 'append', text: doneMessage, role: 'assistant' });
         await this.logHistory('assistant', doneMessage, 'agent');
         return;
       }
 
-      const nextPayload = this.extractActionPayloadFromText(responseText);
+      const nextPayload = envelope?.action || envelope?.nextAction || this.extractActionPayloadFromText(responseText);
       if (!nextPayload) {
         const warning = 'Follow-up response did not include an executable action.';
         params.webview.postMessage({ type: 'append', text: warning, role: 'system' });
@@ -1716,26 +2308,42 @@ export class ActionHandler {
     }
   }
 
-  private buildAutoContinuePrompt(
-    originalPrompt: string,
-    reviewEntry: PendingAutoEditReview,
-    lastSummary: string,
-    depth: number
-  ): string {
-    const afterText = this.truncateMultiline(reviewEntry.afterText || '', 6000);
-    const diffText = this.truncateMultiline(reviewEntry.diff || '', 2000);
+  private async buildAutoContinuePrompt(params: {
+    webview: vscode.Webview;
+    originalPrompt: string;
+    reviewEntry: PendingAutoEditReview;
+    lastSummary: string;
+    depth: number;
+  }): Promise<string | undefined> {
+    const afterText = this.truncateMultiline(params.reviewEntry.afterText || '', 6000);
+    const diffText = this.truncateMultiline(params.reviewEntry.diff || '', 2000);
+    const planEntry = this.planStateByWebview.get(params.webview);
+    const planSection = this.describePlanContext(planEntry);
+    const nextStep = this.findNextPlanStep(planEntry, params.reviewEntry.path);
+    let nextFileSection = '';
+    if (nextStep) {
+      const fileData = await this.readPlanStepFile(nextStep);
+      if (fileData) {
+        nextFileSection = `NEXT STEP FILE (${fileData.path}):\n${this.truncateMultiline(fileData.content, 8000)}`;
+      } else if (nextStep.path) {
+        nextFileSection = `NEXT STEP TARGET: ${nextStep.path}`;
+      }
+    }
     const details = [
       'You are Lucid, a VS Code automation agent continuing an existing workflow.',
       'The user request must be fully satisfied. Produce at most one new action per response.',
       'If no further actions are needed, respond ONLY with the word DONE.',
+      'Always respond with JSON shaped as {"summary": "...", "plan": [{"id": "...","title": "...","status": "pending|active|done|blocked","path"?: "..."}], "action": {...}}. When finished, set "status":"done", include "finalSummary", and add any "alternatives".',
       'When additional edits are required, prefer returning {"command":"lucid.applyModelEdit","type":"vscode","args":[{"path":"<file path or omit for active>","content":"<entire updated file>"}]}.',
       'When another action is required, return the same JSON action description inside a ```json``` block.',
       'Repeat the existing schema: {"command": string, "args": array, "type": "terminal"|"vscode"|"clipboard", "description": string, "text"?: string}.',
       'Never skip the JSON block when more work is needed.',
-      `Completed steps so far: ${depth + 1}`,
-      `USER PROMPT:\n${originalPrompt}`,
-      reviewEntry.fileName ? `UPDATED FILE (${reviewEntry.fileName}):\n${afterText}` : `UPDATED CONTENT:\n${afterText}`,
-      `LAST ACTION SUMMARY:\n${lastSummary}`,
+      `Completed steps so far: ${params.depth + 1}`,
+      `USER PROMPT:\n${params.originalPrompt}`,
+      planSection,
+      nextFileSection,
+      params.reviewEntry.fileName ? `UPDATED FILE (${params.reviewEntry.fileName}):\n${afterText}` : `UPDATED CONTENT:\n${afterText}`,
+      `LAST ACTION SUMMARY:\n${params.lastSummary}`,
       `LATEST DIFF:\n${diffText || '(diff unavailable)'}`
     ];
     return details.filter(Boolean).join('\n\n');

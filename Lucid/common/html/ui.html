@@ -523,6 +523,16 @@
       border-radius: 8px;
       background: rgba(255,255,255,0.02);
       border: 1px solid rgba(255,255,255,0.05);
+      transition: border-color 0.2s ease;
+    }
+    .todo-item[data-status="done"] {
+      opacity: 0.65;
+    }
+    .todo-item[data-status="active"] {
+      border-color: rgba(63, 207, 142, 0.6);
+    }
+    .todo-item[data-status="blocked"] {
+      border-color: rgba(255, 105, 97, 0.6);
     }
     .todo-item-main {
       display: flex;
@@ -1777,6 +1787,9 @@
             if (!todo || !Array.isArray(todo.items) || todo.items.length === 0) return null;
             var card = document.createElement('div');
             card.className = 'todo-card';
+            if (todo.id) {
+              card.dataset.planId = todo.id;
+            }
 
             var header = document.createElement('div');
             header.className = 'todo-card-header';
@@ -1798,6 +1811,9 @@
               var item = todo.items[i];
               var row = document.createElement('li');
               row.className = 'todo-item';
+              if (item.status) {
+                row.dataset.status = item.status;
+              }
 
               var main = document.createElement('div');
               main.className = 'todo-item-main';
@@ -1809,6 +1825,12 @@
               var checkbox = document.createElement('input');
               checkbox.type = 'checkbox';
               checkbox.className = 'todo-item-check';
+              checkbox.disabled = true;
+              if (item.status === 'done' || item.status === 'completed') {
+                checkbox.checked = true;
+              } else if (item.status === 'active' || item.status === 'in_progress') {
+                checkbox.indeterminate = true;
+              }
               var checkboxId = (item.id || ('todo-' + Date.now() + '-' + i));
               checkbox.id = checkboxId;
               main.appendChild(checkbox);
@@ -2623,7 +2645,18 @@
 
           if (todoBlock) {
             todoBlock.dataset.textLength = String(todoLength);
-            messages.appendChild(todoBlock);
+            var planId = (options && options.todoList && options.todoList.id) ? String(options.todoList.id) : (todoBlock.dataset ? todoBlock.dataset.planId : undefined);
+            if (planId) {
+              todoBlock.dataset.planId = planId;
+              var existingPlan = messages.querySelector('.todo-card[data-plan-id=\"' + planId + '\"]');
+              if (existingPlan && existingPlan.parentElement === messages) {
+                messages.replaceChild(todoBlock, existingPlan);
+              } else {
+                messages.appendChild(todoBlock);
+              }
+            } else {
+              messages.appendChild(todoBlock);
+            }
             state.totalChars += todoLength;
             appended = true;
           }

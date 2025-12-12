@@ -278,8 +278,9 @@ async function requestInlineCompletionFromOllama(prompt: string, signal?: AbortS
         webviewView.webview.onDidReceiveMessage(async (msg) => {
           LucidLogger.debug('Webview message received', msg);
           // maintain a per-view set of attached files in closure
-          if (!(webviewView as any)._attachedPaths) (webviewView as any)._attachedPaths = new Set<string>();
-          const attachedPaths: Set<string> = (webviewView as any)._attachedPaths;
+        if (!(webviewView as any)._attachedPaths) (webviewView as any)._attachedPaths = new Set<string>();
+        const attachedPaths: Set<string> = (webviewView as any)._attachedPaths;
+        actionHandler.updateAttachedPaths(webviewView.webview, Array.from(attachedPaths));
 
           async function listWorkspaceFiles() {
             try {
@@ -318,6 +319,7 @@ async function requestInlineCompletionFromOllama(prompt: string, signal?: AbortS
               const p = String(msg.path || '');
               if (p) attachedPaths.add(p);
               webviewView.webview.postMessage({ type: 'attachedChanged', files: Array.from(attachedPaths) });
+              actionHandler.updateAttachedPaths(webviewView.webview, Array.from(attachedPaths));
               return;
             }
 
@@ -325,6 +327,7 @@ async function requestInlineCompletionFromOllama(prompt: string, signal?: AbortS
               const p = String(msg.path || '');
               if (p) attachedPaths.delete(p);
               webviewView.webview.postMessage({ type: 'attachedChanged', files: Array.from(attachedPaths) });
+              actionHandler.updateAttachedPaths(webviewView.webview, Array.from(attachedPaths));
               return;
             }
 
@@ -959,6 +962,7 @@ function buildActionInstructionPrompt(promptWithContext: string, originalPrompt:
   const rules = [
     'You are Lucid, a VS Code automation agent. Produce ONE actionable plan per request.',
     'Always return a JSON object describing the plan in a fenced ```json``` block with the shape {"command": string, "args": array, "type": "terminal"|"vscode"|"clipboard", "description": string, "text"?: string}.',
+    'Structure your JSON as {"summary": "...", "plan": [{"id": "...","title": "...","description": "...","status": "pending|active|done|blocked"}], "action": {...}}. When all work is complete, set "status":"done" and provide "finalSummary" plus optional "alternatives".',
     'If the action is a shell/terminal command, also include a fenced ```bash``` block containing ONLY the executable line so the UI can render it separately.',
     'When editing or refactoring files, you MUST use VS Code commands (for example editor.action.insertSnippet/editor.action.replace/workbench.action.files.save) and set `"type": "vscode"`. Terminal commands such as sed/apply_patch/python/cat/tee used to modify files are strictly forbidden.',
     'For multi-line or structural edits, prefer returning {"command":"lucid.applyModelEdit","type":"vscode","args":[{"path":"<relative or absolute path (omit for active file)>","content":"<entire updated file with no fences>"}]}. The extension will diff and apply this content automatically.',
