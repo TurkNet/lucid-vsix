@@ -291,16 +291,20 @@
       background: rgba(0,0,0,0.35);
       border-radius: 10px;
       padding: 12px;
-      overflow: auto;
+      overflow-x: auto;
+      overflow-y: hidden;
       font-family: var(--vscode-editor-font-family, monospace);
       font-size: 12px;
       line-height: 1.4;
-      white-space: pre-wrap;
+      white-space: pre;
     }
     .diff-line {
       display: block;
       padding: 2px 6px;
       border-radius: 4px;
+      white-space: pre;
+      width: 100%;
+      box-sizing: border-box;
     }
     .diff-line + .diff-line {
       margin-top: 2px;
@@ -1402,28 +1406,195 @@
       }
 
       function createDiffBlock(diffText) {
-        var wrapper = document.createElement('pre');
+        var wrapper = document.createElement('div');
         wrapper.className = 'diff-view';
         if (!diffText) {
           wrapper.textContent = '(no diff)';
           return wrapper;
         }
-        var lines = diffText.replace(/\r\n/g, '\n').split('\n');
-        for (var i = 0; i < lines.length; i++) {
+
+        var parsed = parseDiffText(diffText);
+        var displayEntries = buildDiffDisplay(parsed);
+        if (!displayEntries.length) {
+          wrapper.textContent = '(no diff)';
+          return wrapper;
+        }
+
+        for (var i = 0; i < displayEntries.length; i++) {
+          var entry = displayEntries[i];
           var line = document.createElement('span');
           line.className = 'diff-line';
-          var content = lines[i] || '';
-          if (content.startsWith('+')) {
-            line.classList.add('add');
-          } else if (content.startsWith('-')) {
-            line.classList.add('remove');
-          } else if (content.startsWith('diff') || content.startsWith('---') || content.startsWith('+++')) {
+          if (entry.type === 'meta') {
             line.classList.add('meta');
+            line.textContent = entry.text;
+          } else {
+            if (entry.type === 'add') line.classList.add('add');
+            else if (entry.type === 'remove') line.classList.add('remove');
+            var markerChar = entry.type === 'add' ? '+' : entry.type === 'remove' ? '-' : ' ';
+            var beforeLabel = formatDiffNumber(entry.before);
+            var afterLabel = formatDiffNumber(entry.after);
+            var text = entry.text || '';
+            line.textContent = `${markerChar} ${beforeLabel} ${afterLabel}  ${text}`;
           }
-          line.textContent = content;
           wrapper.appendChild(line);
         }
         return wrapper;
+      }
+
+      function parseDiffText(diffText) {
+        var normalized = diffText.replace(/\r\n/g, '\n');
+        var rows = normalized.split('\n');
+        var hasHunkHeaders = rows.some(function (row) { return row.startsWith('@@'); });
+        return hasHunkHeaders ? parseUnifiedDiff(rows) : parseSimpleDiff(rows);
+      }
+
+      function parseUnifiedDiff(rows) {
+        var metaLines = [];
+        var hunks = [];
+        var current = null;
+        var beforeLine = 0;
+        var afterLine = 0;
+
+        function startHunk(header) {
+          if (current) hunks.push(current);
+          current = { header: header, lines: [] };
+          var match = /@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/.exec(header);
+          if (match) {
+            beforeLine = parseInt(match[1], 10) || 0;
+            afterLine = parseInt(match[3], 10) || 0;
+          } else {
+            beforeLine = 0;
+            afterLine = 0;
+          }
+        }
+
+        function addLine(entry) {
+          if (!current) return;
+          current.lines.push(entry);
+        }
+
+        for (var i = 0; i < rows.length; i++) {
+          var raw = rows[i];
+          if (raw.startsWith('diff ')) {
+            metaLines.push(raw);
+            continue;
+          }
+          if (raw.startsWith('index ')) continue;
+          if (raw.startsWith('--- ') || raw.startsWith('+++ ')) continue;
+          if (raw.startsWith('@@')) {
+            startHunk(raw);
+            continue;
+          }
+          if (!current) continue;
+
+          if (raw.startsWith('\\')) {
+            addLine({ type: 'meta', text: raw });
+            continue;
+          }
+
+          var marker = raw.charAt(0);
+          var content = raw.slice(1);
+          if (marker === '+') {
+            addLine({ type: 'add', text: content, before: null, after: afterLine });
+            afterLine++;
+          } else if (marker === '-') {
+            addLine({ type: 'remove', text: content, before: beforeLine, after: null });
+            beforeLine++;
+          } else if (marker === ' ') {
+            addLine({ type: 'context', text: content, before: beforeLine, after: afterLine });
+            beforeLine++;
+            afterLine++;
+          } else {
+            addLine({ type: 'meta', text: raw });
+          }
+        }
+        if (current) hunks.push(current);
+        return { meta: metaLines, hunks: hunks };
+      }
+
+      function parseSimpleDiff(rows) {
+        var metaLines = [];
+        var entries = [];
+        var beforeLine = 0;
+        var afterLine = 0;
+        for (var i = 0; i < rows.length; i++) {
+          var raw = rows[i];
+          if (raw.startsWith('diff ')) {
+            metaLines.push(raw);
+            continue;
+          }
+          if (raw.startsWith('--- ') || raw.startsWith('+++ ')) continue;
+          if (raw.startsWith('\\')) {
+            entries.push({ type: 'meta', text: raw });
+            continue;
+          }
+          if (!raw.length) {
+            beforeLine++;
+            afterLine++;
+            entries.push({ type: 'context', text: '', before: beforeLine, after: afterLine });
+            continue;
+          }
+          var marker = raw.charAt(0);
+          var content = raw.length > 1 ? raw.slice(2) : '';
+          if (marker === '+') {
+            afterLine++;
+            entries.push({ type: 'add', text: content, before: null, after: afterLine });
+          } else if (marker === '-') {
+            beforeLine++;
+            entries.push({ type: 'remove', text: content, before: beforeLine, after: null });
+          } else if (marker === ' ') {
+            beforeLine++;
+            afterLine++;
+            entries.push({ type: 'context', text: raw.slice(2), before: beforeLine, after: afterLine });
+          } else {
+            entries.push({ type: 'meta', text: raw });
+          }
+        }
+        var hunks = entries.length ? [{ header: '@@ -1 +1 @@', lines: entries }] : [];
+        return { meta: metaLines, hunks: hunks };
+      }
+
+      function buildDiffDisplay(parsed) {
+        var output = [];
+        if (parsed.meta && parsed.meta.length) {
+          for (var i = 0; i < parsed.meta.length; i++) {
+            output.push({ type: 'meta', text: parsed.meta[i] });
+          }
+        }
+        if (!parsed.hunks) return output;
+        for (var h = 0; h < parsed.hunks.length; h++) {
+          var hunk = parsed.hunks[h];
+          if (!hunk.lines || !hunk.lines.length) continue;
+          var important = new Set();
+          for (var idx = 0; idx < hunk.lines.length; idx++) {
+            var kind = hunk.lines[idx].type;
+            if (kind === 'add' || kind === 'remove') {
+              for (var offset = -3; offset <= 3; offset++) {
+                var target = idx + offset;
+                if (target >= 0 && target < hunk.lines.length) important.add(target);
+              }
+            }
+          }
+          if (!important.size) continue;
+          output.push({ type: 'meta', text: hunk.header });
+          var sorted = Array.from(important).sort(function (a, b) { return a - b; });
+          var previous = -1;
+          for (var s = 0; s < sorted.length; s++) {
+            var index = sorted[s];
+            if (previous !== -1 && index - previous > 1) {
+              output.push({ type: 'meta', text: '…' });
+            }
+            output.push(hunk.lines[index]);
+            previous = index;
+          }
+        }
+        return output;
+      }
+
+      function formatDiffNumber(value) {
+        if (typeof value !== 'number') return '     ';
+        var str = String(value);
+        return str.length >= 5 ? str.slice(-5) : Array(5 - str.length + 1).join(' ') + str;
       }
 
         function createActionOutput(actionResult, defaultOpen) {

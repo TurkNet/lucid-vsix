@@ -935,7 +935,24 @@ async function buildPromptWithContext(prompt: string, attachedPaths: Set<string>
     }
   }
 
-  return `${combined}\n${prompt}`;
+  const guidanceSections = [
+    'SYSTEM: You are Lucid, an assistant that helps with coding tasks when explicitly asked.',
+    'Only reference or analyze the optional workspace context if the user prompt clearly relates to the code. '
+    + 'If the user is greeting, chatting, or asking something unrelated to the code, ignore the context entirely.',
+    'When the user does request code help, mention specific files or snippets as needed and keep the answer concise.',
+    'Reply in the same language the user used in their prompt when possible.'
+  ];
+
+  const sections: string[] = [guidanceSections.join('\n')];
+
+  const trimmedContext = combined.trim();
+  if (trimmedContext.length > 0) {
+    sections.push('OPTIONAL CONTEXT (use only if relevant):\n' + trimmedContext);
+  }
+
+  sections.push('USER PROMPT:\n' + prompt);
+
+  return sections.join('\n\n');
 }
 
 function buildActionInstructionPrompt(promptWithContext: string, originalPrompt: string): string {
@@ -944,6 +961,7 @@ function buildActionInstructionPrompt(promptWithContext: string, originalPrompt:
     'Always return a JSON object describing the plan in a fenced ```json``` block with the shape {"command": string, "args": array, "type": "terminal"|"vscode"|"clipboard", "description": string, "text"?: string}.',
     'If the action is a shell/terminal command, also include a fenced ```bash``` block containing ONLY the executable line so the UI can render it separately.',
     'When editing or refactoring files, you MUST use VS Code commands (for example editor.action.insertSnippet/editor.action.replace/workbench.action.files.save) and set `"type": "vscode"`. Terminal commands such as sed/apply_patch/python/cat/tee used to modify files are strictly forbidden.',
+    'For multi-line or structural edits, prefer returning {"command":"lucid.applyModelEdit","type":"vscode","args":[{"path":"<relative or absolute path (omit for active file)>","content":"<entire updated file with no fences>"}]}. The extension will diff and apply this content automatically.',
     'Terminal actions are reserved for running builds, linters, package managers, or other commands that cannot be performed via VS Code APIs. If a change can be done inside the editor, choose a VS Code command instead.',
     'When using editor.action.replace include a JSON arg like {"target": "<existing text to replace>", "snippet": "<replacement>"} or provide an explicit editor selection. Never rely on replacing the entire file.',
     'For terminal actions the "command" must be the actual executable (for example "./set_version.sh" or "go") and "args" must contain only real shell arguments—never helper names like "terminal.run", "terminal.runSelectedText", "lucid.runTerminalCommand", or descriptive phrases.',

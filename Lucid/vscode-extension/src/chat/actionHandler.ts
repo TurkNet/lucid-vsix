@@ -35,6 +35,7 @@ interface PendingActionEntry {
   payload: LucidActionPayload;
   webview: vscode.Webview;
   originalPrompt: string;
+  depth: number;
 }
 
 interface ActionPreviewUiPayload {
@@ -147,6 +148,7 @@ const DIFFABLE_EDITOR_COMMANDS = new Set<string>([
 export class ActionHandler {
   private readonly pendingActions = new Map<string, PendingActionEntry>();
   private readonly pendingAutoEditReviews = new Map<string, PendingAutoEditReview>();
+  private readonly maxAutoContinueDepth = 5;
 
   constructor(
     private readonly askHandler: AskHandler,
@@ -173,7 +175,7 @@ export class ActionHandler {
 
       const promptForReview = originalPrompt || finalPrompt;
       if (this.shouldAutoExecuteVsCodeAction(actionPayload)) {
-        await this.executeAutoVsCodeAction(webview, actionPayload);
+        await this.executeAutoVsCodeAction(webview, actionPayload, promptForReview, 0);
         return;
       }
       const actionId = this.registerPendingAction(webview, actionPayload, promptForReview);
@@ -203,10 +205,14 @@ export class ActionHandler {
     if (type !== 'vscode') {
       return false;
     }
-    return payload.command.trim().toLowerCase().startsWith('editor.action.');
+    const normalized = (payload.command || '').trim().toLowerCase();
+    if (normalized === 'lucid.applymodeledit') {
+      return true;
+    }
+    return normalized.startsWith('editor.action.');
   }
 
-  private async executeAutoVsCodeAction(webview: vscode.Webview, payload: LucidActionPayload): Promise<void> {
+  private async executeAutoVsCodeAction(webview: vscode.Webview, payload: LucidActionPayload, originalPrompt: string, depth = 0): Promise<void> {
     webview.postMessage({ type: 'status', text: 'Applying VS Code action…', streaming: false });
     try {
       const executionResult = await this.executeActionPayload(payload);
@@ -219,6 +225,16 @@ export class ActionHandler {
       await this.logHistory(role, message, 'agent');
       if (executionResult.autoEditReview) {
         await this.emitAutoEditWorkflowSummary(webview, executionResult.autoEditReview.id);
+      }
+      if (executionResult.success) {
+        await this.tryAutoContinueRecursiveAction({
+          webview,
+          originalPrompt,
+          lastPayload: payload,
+          executionResult,
+          summary,
+          depth
+        });
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -349,9 +365,9 @@ export class ActionHandler {
     return normalized;
   }
 
-  private registerPendingAction(webview: vscode.Webview, payload: LucidActionPayload, originalPrompt: string): string {
+  private registerPendingAction(webview: vscode.Webview, payload: LucidActionPayload, originalPrompt: string, depth = 0): string {
     const id = `action-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    this.pendingActions.set(id, { id, payload, webview, originalPrompt });
+    this.pendingActions.set(id, { id, payload, webview, originalPrompt, depth });
     return id;
   }
 
@@ -377,6 +393,16 @@ export class ActionHandler {
       await this.logHistory(executionResult.success ? 'assistant' : 'error', summary, 'agent', undefined, storedResult);
       if (executionResult.autoEditReview) {
         await this.emitAutoEditWorkflowSummary(targetView, executionResult.autoEditReview.id);
+      }
+      if (executionResult.success) {
+        await this.tryAutoContinueRecursiveAction({
+          webview: targetView,
+          originalPrompt: entry.originalPrompt,
+          lastPayload: entry.payload,
+          executionResult,
+          summary,
+          depth: entry.depth
+        });
       }
       await this.sendActionReviewToOllama(targetView, entry.payload, executionResult, entry.originalPrompt, summary);
     } catch (err) {
@@ -598,6 +624,9 @@ export class ActionHandler {
 
     if (kind === 'vscode') {
       const normalizedCommand = (action.command || '').trim().toLowerCase();
+      if (normalizedCommand === 'lucid.applymodeledit') {
+        return this.handleModelEditCommand(action);
+      }
       if (normalizedCommand === 'open') {
         return await this.handleOpenFileCommand(action);
       }
@@ -918,6 +947,84 @@ export class ActionHandler {
     }
   }
 
+  private async handleModelEditCommand(action: LucidActionPayload): Promise<ActionExecutionResult> {
+    try {
+      const editArgs = this.parseModelEditArgs(action);
+      const content = this.stripModelEditContent(editArgs.content || '');
+      if (!content || !content.trim()) {
+        return {
+          success: false,
+          type: 'vscode',
+          stderr: 'lucid.applyModelEdit requires a "content" field with the full updated file text.',
+          command: action.command,
+          args: this.toStringArgs(action.args),
+          suggestions: ['Include the entire updated file text under args[0].content or action.text (avoid wrapping it in fences).']
+        };
+      }
+
+      const targetDocument = await this.resolveDocumentForModelEdit(editArgs.path);
+      if (!targetDocument) {
+        return {
+          success: false,
+          type: 'vscode',
+          stderr: 'No target document found for lucid.applyModelEdit. Specify a path or open the file in VS Code.',
+          command: action.command,
+          args: this.toStringArgs(action.args),
+          suggestions: ['Provide args[0].path with a workspace-relative or absolute file path.', 'Open the file you want to edit before running this action.']
+        };
+      }
+
+      await vscode.window.showTextDocument(targetDocument, { preview: false });
+      const beforeText = targetDocument.getText();
+      if (beforeText === content) {
+        return {
+          success: true,
+          type: 'vscode',
+          stdout: 'Document already matches provided content.',
+          command: action.command,
+          args: this.toStringArgs(action.args)
+        };
+      }
+
+      const edit = new vscode.WorkspaceEdit();
+      const fullRange = new vscode.Range(
+        targetDocument.positionAt(0),
+        targetDocument.positionAt(beforeText.length)
+      );
+      edit.replace(targetDocument.uri, fullRange, content);
+      const applied = await vscode.workspace.applyEdit(edit);
+      if (!applied) {
+        return {
+          success: false,
+          type: 'vscode',
+          stderr: 'VS Code could not apply the provided content.',
+          command: action.command,
+          args: this.toStringArgs(action.args)
+        };
+      }
+
+      const afterText = targetDocument.getText();
+      const review = this.registerAutoEditReview(action, targetDocument, beforeText, afterText);
+      return {
+        success: true,
+        type: 'vscode',
+        stdout: `Applied model edit to ${path.basename(targetDocument.fileName || 'document')}.`,
+        command: action.command,
+        args: this.toStringArgs(action.args),
+        autoEditReview: review
+      };
+    } catch (err) {
+      const stderr = err instanceof Error ? err.message : String(err);
+      return {
+        success: false,
+        type: 'vscode',
+        stderr,
+        command: action.command,
+        args: this.toStringArgs(action.args)
+      };
+    }
+  }
+
   private async applySnippetReplacement(action: LucidActionPayload): Promise<ActionExecutionResult> {
     const editor = vscode.window.activeTextEditor;
     if (!editor) {
@@ -932,7 +1039,7 @@ export class ActionHandler {
     }
     const replaceArgs = this.parseReplaceArgs(action.args);
     const snippet = replaceArgs.snippet;
-    if (!snippet || !snippet.trim()) {
+    if (typeof snippet !== 'string') {
       return {
         success: false,
         type: 'vscode',
@@ -1049,16 +1156,336 @@ export class ActionHandler {
     return {};
   }
 
+  private parseModelEditArgs(action: LucidActionPayload): { content?: string; path?: string } {
+    const argsValue = Array.isArray(action.args) && action.args.length > 0 ? action.args[0] : action.args;
+    let content = typeof action.text === 'string' && action.text.trim().length ? action.text : undefined;
+    let pathHint: string | undefined;
+    if (typeof argsValue === 'string') {
+      content = argsValue;
+    } else if (typeof argsValue === 'object' && argsValue) {
+      if (typeof (argsValue as any).content === 'string') {
+        content = (argsValue as any).content;
+      }
+      const pathCandidate = (argsValue as any).path ?? (argsValue as any).file ?? (argsValue as any).filePath;
+      if (typeof pathCandidate === 'string') {
+        pathHint = pathCandidate;
+      }
+    }
+    return { content, path: pathHint };
+  }
+
+  private stripModelEditContent(raw: string): string {
+    if (!raw) return '';
+    let text = raw.trim();
+    const fenced = text.match(/^```[a-zA-Z0-9_-]*\s*[\r\n]+([\s\S]*?)```$/);
+    if (fenced && fenced[1]) {
+      text = fenced[1];
+    }
+    return text.trimEnd();
+  }
+
+  private async resolveDocumentForModelEdit(pathHint?: string): Promise<vscode.TextDocument | undefined> {
+    try {
+      if (pathHint && pathHint.trim().length) {
+        const absoluteCandidates = this.resolveCandidatePaths(pathHint.trim());
+        for (const absolute of absoluteCandidates) {
+          try {
+            const stat = await vscode.workspace.fs.stat(vscode.Uri.file(absolute));
+            if (stat.type === vscode.FileType.File) {
+              const uri = vscode.Uri.file(absolute);
+              return await vscode.workspace.openTextDocument(uri);
+            }
+          } catch {
+            continue;
+          }
+        }
+      }
+      const editor = vscode.window.activeTextEditor;
+      if (editor?.document) {
+        return editor.document;
+      }
+      return undefined;
+    } catch (err) {
+      LucidLogger.error('resolveDocumentForModelEdit error', err);
+      return undefined;
+    }
+  }
+
+  private resolveCandidatePaths(pathHint: string): string[] {
+    const candidates: string[] = [];
+    const normalizedHint = pathHint.replace(/\\/g, '/');
+    if (normalizedHint.startsWith('file://')) {
+      try {
+        const uri = vscode.Uri.parse(normalizedHint);
+        candidates.push(uri.fsPath);
+      } catch (_) { }
+    }
+    const home = os.homedir?.();
+    if (normalizedHint.startsWith('~/') && home) {
+      candidates.push(path.join(home, normalizedHint.slice(2)));
+    }
+    if (path.isAbsolute(normalizedHint)) {
+      candidates.push(path.normalize(normalizedHint));
+    }
+    const folders = vscode.workspace.workspaceFolders || [];
+    for (const folder of folders) {
+      const combined = path.join(folder.uri.fsPath, normalizedHint);
+      candidates.push(path.normalize(combined));
+    }
+    return candidates;
+  }
+
   private findTargetRange(document: vscode.TextDocument, target: string): vscode.Range | undefined {
     if (!target) return undefined;
     const content = document.getText();
+
+    const directIndex = content.indexOf(target);
+    if (directIndex !== -1) {
+      const start = document.positionAt(directIndex);
+      const end = document.positionAt(directIndex + target.length);
+      return new vscode.Range(start, end);
+    }
+
+    const normalizedInfo = this.buildNormalizedContent(content);
     const normalizedTarget = target.replace(/\r\n/g, '\n');
-    const normalizedContent = content.replace(/\r\n/g, '\n');
-    const index = normalizedContent.indexOf(normalizedTarget);
-    if (index === -1) return undefined;
-    const start = document.positionAt(index);
-    const end = document.positionAt(index + normalizedTarget.length);
+    const normalizedIndex = normalizedInfo.text.indexOf(normalizedTarget);
+    if (normalizedIndex !== -1) {
+      const range = this.rangeFromNormalized(document, normalizedInfo, normalizedIndex, normalizedTarget.length);
+      if (range) return range;
+    }
+
+    const tolerantRegex = this.buildWhitespaceTolerantRegex(normalizedTarget);
+    if (tolerantRegex) {
+      const match = tolerantRegex.exec(normalizedInfo.text);
+      if (match && typeof match.index === 'number') {
+        const range = this.rangeFromNormalized(document, normalizedInfo, match.index, match[0].length);
+        if (range) return range;
+      }
+    }
+
+    const trimmedTarget = normalizedTarget.trim();
+    if (!trimmedTarget) return undefined;
+    const searchTerms = this.extractSearchTerms(trimmedTarget);
+    if (!searchTerms.length) return undefined;
+
+    const bestMatch = this.scanDocumentForTerms(normalizedInfo.text, searchTerms, context => this.computeMatchScore(searchTerms, context));
+    if (bestMatch) {
+      return this.rangeFromNormalized(document, normalizedInfo, bestMatch.start, bestMatch.length);
+    }
+
+    const subsections = this.buildSectionWindows(normalizedInfo.text, trimmedTarget.split('\n'));
+    if (subsections && subsections.length) {
+      const windowMatch = this.scanSectionsForMatch(normalizedInfo.text, subsections);
+      if (windowMatch) {
+        return this.rangeFromNormalized(document, normalizedInfo, windowMatch.start, windowMatch.length);
+      }
+    }
+
+    const approxLineRange = this.findRangeByLooseLineMatch(document, trimmedTarget);
+    if (approxLineRange) {
+      return approxLineRange;
+    }
+
+    return undefined;
+  }
+
+  private extractSearchTerms(target: string): string[] {
+    return target
+      .split(/[\n\r]+/)
+      .map(line => line.trim())
+      .filter(line => line.length > 2);
+  }
+
+  private scanDocumentForTerms(
+    normalizedText: string,
+    terms: string[],
+    scoreFn: (context: { before: string; target: string; after: string }) => number
+  ): { start: number; length: number } | undefined {
+    if (!terms.length) return undefined;
+    let best: { start: number; length: number; score: number } | undefined;
+    for (const term of terms) {
+      const regex = new RegExp(this.escapeRegexChar(term), 'g');
+      let match: RegExpExecArray | null;
+      while ((match = regex.exec(normalizedText)) !== null) {
+        const start = match.index;
+        const length = term.length;
+        const before = normalizedText.slice(Math.max(0, start - 40), start);
+        const after = normalizedText.slice(start + length, start + length + 40);
+        const score = scoreFn({ before, target: term, after });
+        if (!best || score > best.score) {
+          best = { start, length, score };
+        }
+      }
+    }
+    return best;
+  }
+
+  private computeMatchScore(terms: string[], context: { before: string; target: string; after: string }): number {
+    let score = 0;
+    for (const term of terms) {
+      if (context.target.includes(term)) score += term.length * 2;
+      if (context.before.includes(term)) score += term.length;
+      if (context.after.includes(term)) score += term.length;
+    }
+    return score;
+  }
+
+  private buildSectionWindows(normalizedText: string, lines: string[]): Array<{ snippet: string; approxLength: number }> {
+    if (!lines.length) return [];
+    const filtered = lines.filter(line => line.trim().length > 0);
+    if (!filtered.length) return [];
+    const snippet = filtered.join('\n');
+    return [{ snippet, approxLength: snippet.length }];
+  }
+
+  private scanSectionsForMatch(normalizedText: string, sections: Array<{ snippet: string; approxLength: number }>): { start: number; length: number } | undefined {
+    for (const section of sections) {
+      const regex = this.buildWhitespaceTolerantRegex(section.snippet);
+      if (!regex) continue;
+      const match = regex.exec(normalizedText);
+      if (match && typeof match.index === 'number') {
+        return { start: match.index, length: match[0].length };
+      }
+    }
+    return undefined;
+  }
+
+  private findRangeByLooseLineMatch(document: vscode.TextDocument, normalizedTarget: string): vscode.Range | undefined {
+    const targetLines = normalizedTarget.split('\n');
+    if (!targetLines.length) return undefined;
+    const docLines = this.splitLines(document.getText());
+    if (!docLines.length) return undefined;
+    const targetLen = targetLines.length;
+    for (let i = 0; i <= docLines.length - targetLen; i++) {
+      if (!this.looseLineEquals(docLines[i], targetLines[0])) continue;
+      let matches = true;
+      for (let j = 1; j < targetLen; j++) {
+        if (!this.looseLineEquals(docLines[i + j], targetLines[j])) {
+          matches = false;
+          break;
+        }
+      }
+      if (matches) {
+        const startLine = Math.max(0, i);
+        const endLine = Math.min(document.lineCount - 1, i + targetLen - 1);
+        const start = new vscode.Position(startLine, 0);
+        const end = document.lineAt(endLine).range.end;
+        return new vscode.Range(start, end);
+      }
+    }
+    return undefined;
+  }
+
+  private looseLineEquals(docLine: string, targetLine: string): boolean {
+    const normalize = (line: string): string => {
+      if (!line) return '';
+      let trimmed = line.trim();
+      if (!trimmed.length) return '';
+      trimmed = this.stripCommentPrefix(trimmed);
+      return trimmed.replace(/\s+/g, ' ');
+    };
+    const normalizedDoc = normalize(docLine);
+    const normalizedTarget = normalize(targetLine);
+    if (!normalizedTarget.length) {
+      return normalizedDoc.length === 0;
+    }
+    return normalizedDoc === normalizedTarget;
+  }
+
+  private stripCommentPrefix(line: string): string {
+    let text = line;
+    const blockStart = text.startsWith('/*');
+    if (blockStart) {
+      text = text.replace(/^\/\*+/, '').replace(/\*+\/$/, '').trim();
+    }
+    const prefixes = ['//', '#', '--', ';', '*'];
+    for (const prefix of prefixes) {
+      if (text.startsWith(prefix)) {
+        return text.slice(prefix.length).trim();
+      }
+    }
+    return blockStart ? text.trim() : text;
+  }
+
+  private buildNormalizedContent(text: string): { text: string; indexMap: number[]; spanMap: number[] } {
+    const normalizedChars: string[] = [];
+    const indexMap: number[] = [];
+    const spanMap: number[] = [];
+
+    for (let i = 0; i < text.length; i++) {
+      const ch = text[i];
+      if (ch === '\r' && i + 1 < text.length && text[i + 1] === '\n') {
+        normalizedChars.push('\n');
+        indexMap.push(i);
+        spanMap.push(2);
+        i++; // skip the '\n' next to '\r'
+        continue;
+      }
+      normalizedChars.push(ch);
+      indexMap.push(i);
+      spanMap.push(1);
+    }
+
+    return { text: normalizedChars.join(''), indexMap, spanMap };
+  }
+
+  private rangeFromNormalized(
+    document: vscode.TextDocument,
+    normalizedInfo: { text: string; indexMap: number[]; spanMap: number[] },
+    startIndex: number,
+    length: number
+  ): vscode.Range | undefined {
+    if (startIndex < 0 || length <= 0) return undefined;
+    const endIndex = startIndex + length - 1;
+    if (
+      startIndex >= normalizedInfo.indexMap.length ||
+      endIndex >= normalizedInfo.indexMap.length ||
+      startIndex >= normalizedInfo.spanMap.length ||
+      endIndex >= normalizedInfo.spanMap.length
+    ) {
+      return undefined;
+    }
+    const startOffset = normalizedInfo.indexMap[startIndex];
+    const endOffset = normalizedInfo.indexMap[endIndex] + normalizedInfo.spanMap[endIndex];
+    const start = document.positionAt(startOffset);
+    const end = document.positionAt(endOffset);
     return new vscode.Range(start, end);
+  }
+
+  private buildWhitespaceTolerantRegex(target: string): RegExp | undefined {
+    if (!target || !target.trim()) return undefined;
+    let pattern = '';
+    let whitespaceBuffer = '';
+
+    for (let i = 0; i < target.length; i++) {
+      const ch = target[i];
+      if (ch === ' ' || ch === '\t') {
+        whitespaceBuffer += ch;
+        continue;
+      }
+      if (whitespaceBuffer.length) {
+        pattern += '[ \\t]+';
+        whitespaceBuffer = '';
+      }
+      pattern += this.escapeRegexChar(ch);
+    }
+
+    if (whitespaceBuffer.length) {
+      pattern += '[ \\t]+';
+    }
+
+    try {
+      return new RegExp(pattern, 'm');
+    } catch {
+      return undefined;
+    }
+  }
+
+  private escapeRegexChar(ch: string): string {
+    if (ch === '\n') return '\\n';
+    if (ch === '\t') return '\\t';
+    if (ch === '\r') return '\\r';
+    return ch.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   }
 
   private registerAutoEditReview(
@@ -1165,24 +1592,13 @@ export class ActionHandler {
     const beforeLines = this.splitLines(beforeText);
     const afterLines = this.splitLines(afterText);
     const ops = this.computeLineDiff(beforeLines, afterLines);
-    const lines: string[] = [];
-    const displayName = filePath ? path.basename(filePath) : 'document';
-    lines.push(`diff -- auto-edit ${displayName}`);
-    lines.push('--- before');
-    lines.push('+++ after');
-    let hasChange = false;
-    for (const op of ops) {
-      if (op.type === 'delete') {
-        lines.push(`- ${op.line}`);
-        hasChange = true;
-      } else if (op.type === 'insert') {
-        lines.push(`+ ${op.line}`);
-        hasChange = true;
-      } else if (op.type === 'equal') {
-        lines.push(`  ${op.line}`);
-      }
+    if (!ops.some(op => op.type !== 'equal')) {
+      return '';
     }
-    return hasChange ? lines.join('\n') : '';
+    const numbered = this.attachLineNumbersToDiff(ops);
+    const hunks = this.buildDiffHunks(numbered, 3);
+    if (!hunks.length) return '';
+    return this.formatUnifiedDiff(hunks, filePath);
   }
 
   private splitLines(text: string): string[] {
@@ -1244,6 +1660,231 @@ export class ActionHandler {
       }
     }
     return { added, removed };
+  }
+
+  private async tryAutoContinueRecursiveAction(params: {
+    webview: vscode.Webview;
+    originalPrompt: string;
+    lastPayload: LucidActionPayload;
+    executionResult: ActionExecutionResult;
+    summary: string;
+    depth: number;
+  }): Promise<void> {
+    if (params.depth >= this.maxAutoContinueDepth) return;
+    const reviewId = params.executionResult.autoEditReview?.id;
+    if (!reviewId) return;
+    const reviewEntry = this.pendingAutoEditReviews.get(reviewId);
+    if (!reviewEntry || !reviewEntry.afterText) return;
+    const followupPrompt = this.buildAutoContinuePrompt(params.originalPrompt, reviewEntry, params.summary, params.depth);
+    if (!followupPrompt) return;
+
+    try {
+      const responseText = await this.requestActionResponseFromOllama(params.webview, followupPrompt, false);
+      if (!responseText || !responseText.trim()) return;
+      if (this.isDoneResponse(responseText)) {
+        const doneMessage = 'Agent workflow completed automatically.';
+        params.webview.postMessage({ type: 'append', text: doneMessage, role: 'assistant' });
+        await this.logHistory('assistant', doneMessage, 'agent');
+        return;
+      }
+
+      const nextPayload = this.extractActionPayloadFromText(responseText);
+      if (!nextPayload) {
+        const warning = 'Follow-up response did not include an executable action.';
+        params.webview.postMessage({ type: 'append', text: warning, role: 'system' });
+        await this.logHistory('system', warning, 'agent');
+        return;
+      }
+
+      if (this.shouldAutoExecuteVsCodeAction(nextPayload)) {
+        await this.executeAutoVsCodeAction(params.webview, nextPayload, params.originalPrompt, params.depth + 1);
+        return;
+      }
+
+      const nextActionId = this.registerPendingAction(params.webview, nextPayload, params.originalPrompt, params.depth + 1);
+      const preview = this.buildActionPreview(nextActionId, nextPayload);
+      params.webview.postMessage({
+        type: 'append',
+        text: preview.message,
+        role: 'assistant',
+        options: { actionPreview: preview.ui }
+      });
+      params.webview.postMessage({ type: 'status', text: 'Action ready. Use the toolbar or Play button to execute.', streaming: false });
+      await this.logHistory('assistant', preview.message, 'agent', this.buildStoredPreview(preview.ui));
+    } catch (err) {
+      LucidLogger.error('tryAutoContinueRecursiveAction error', err);
+    }
+  }
+
+  private buildAutoContinuePrompt(
+    originalPrompt: string,
+    reviewEntry: PendingAutoEditReview,
+    lastSummary: string,
+    depth: number
+  ): string {
+    const afterText = this.truncateMultiline(reviewEntry.afterText || '', 6000);
+    const diffText = this.truncateMultiline(reviewEntry.diff || '', 2000);
+    const details = [
+      'You are Lucid, a VS Code automation agent continuing an existing workflow.',
+      'The user request must be fully satisfied. Produce at most one new action per response.',
+      'If no further actions are needed, respond ONLY with the word DONE.',
+      'When additional edits are required, prefer returning {"command":"lucid.applyModelEdit","type":"vscode","args":[{"path":"<file path or omit for active>","content":"<entire updated file>"}]}.',
+      'When another action is required, return the same JSON action description inside a ```json``` block.',
+      'Repeat the existing schema: {"command": string, "args": array, "type": "terminal"|"vscode"|"clipboard", "description": string, "text"?: string}.',
+      'Never skip the JSON block when more work is needed.',
+      `Completed steps so far: ${depth + 1}`,
+      `USER PROMPT:\n${originalPrompt}`,
+      reviewEntry.fileName ? `UPDATED FILE (${reviewEntry.fileName}):\n${afterText}` : `UPDATED CONTENT:\n${afterText}`,
+      `LAST ACTION SUMMARY:\n${lastSummary}`,
+      `LATEST DIFF:\n${diffText || '(diff unavailable)'}`
+    ];
+    return details.filter(Boolean).join('\n\n');
+  }
+
+  private isDoneResponse(text: string): boolean {
+    if (!text) return false;
+    const trimmed = text.trim();
+    if (!trimmed) return false;
+    if (trimmed.toUpperCase() === 'DONE') return true;
+    if (/\"status\"\s*:\s*\"done\"/i.test(trimmed)) return true;
+    if (/\"command\"\s*:\s*\"done\"/i.test(trimmed)) return true;
+    return false;
+  }
+
+  private truncateMultiline(text: string, max = 6000): string {
+    if (!text) return '';
+    if (text.length <= max) return text;
+    return `${text.slice(0, max)}…`;
+  }
+
+  private attachLineNumbersToDiff(ops: { type: 'equal' | 'insert' | 'delete'; line: string }[]): Array<{
+    type: 'equal' | 'insert' | 'delete';
+    line: string;
+    before?: number;
+    after?: number;
+  }> {
+    const result: Array<{ type: 'equal' | 'insert' | 'delete'; line: string; before?: number; after?: number }> = [];
+    let beforeLine = 1;
+    let afterLine = 1;
+    for (const op of ops) {
+      if (op.type === 'equal') {
+        result.push({ type: 'equal', line: op.line, before: beforeLine, after: afterLine });
+        beforeLine++;
+        afterLine++;
+      } else if (op.type === 'delete') {
+        result.push({ type: 'delete', line: op.line, before: beforeLine });
+        beforeLine++;
+      } else if (op.type === 'insert') {
+        result.push({ type: 'insert', line: op.line, after: afterLine });
+        afterLine++;
+      }
+    }
+    return result;
+  }
+
+  private buildDiffHunks(
+    entries: Array<{ type: 'equal' | 'insert' | 'delete'; line: string; before?: number; after?: number }>,
+    contextSize: number
+  ): Array<Array<{ type: 'context' | 'add' | 'remove'; text: string; before?: number; after?: number }>> {
+    const hunks: Array<Array<{ type: 'context' | 'add' | 'remove'; text: string; before?: number; after?: number }>> = [];
+    const contextBuffer: Array<{ type: 'context'; text: string; before?: number; after?: number }> = [];
+    type CurrentHunk = {
+      lines: Array<{ type: 'context' | 'add' | 'remove'; text: string; before?: number; after?: number }>;
+      trailingContext: Array<{ type: 'context'; text: string; before?: number; after?: number }>;
+    };
+    let current: CurrentHunk | undefined;
+
+    const cloneLine = (line: { type: 'context'; text: string; before?: number; after?: number }) => ({
+      type: line.type,
+      text: line.text,
+      before: line.before,
+      after: line.after
+    });
+
+    const startHunk = () => {
+      current = {
+        lines: contextBuffer.map(cloneLine),
+        trailingContext: []
+      };
+      contextBuffer.length = 0;
+    };
+
+    const finalizeHunk = () => {
+      if (!current || !current.lines.length) {
+        current = undefined;
+        return;
+      }
+      hunks.push(current.lines);
+      current = undefined;
+    };
+
+    for (const entry of entries) {
+      if (entry.type === 'equal') {
+        const ctxLine = { type: 'context' as const, text: entry.line, before: entry.before, after: entry.after };
+        if (current) {
+          current.lines.push(ctxLine);
+          current.trailingContext.push(ctxLine);
+          if (current.trailingContext.length > contextSize) {
+            const overflow = current.trailingContext.shift();
+            if (overflow) {
+              const idx = current.lines.indexOf(overflow);
+              if (idx !== -1) current.lines.splice(idx, 1);
+            }
+            const trailingForNext = current.trailingContext.slice();
+            finalizeHunk();
+            contextBuffer.length = 0;
+            for (const nextCtx of trailingForNext) {
+              contextBuffer.push(cloneLine(nextCtx));
+            }
+            if (contextBuffer.length > contextSize) {
+              contextBuffer.splice(0, contextBuffer.length - contextSize);
+            }
+          }
+        } else {
+          contextBuffer.push(ctxLine);
+          if (contextBuffer.length > contextSize) contextBuffer.shift();
+        }
+      } else {
+        if (!current) {
+          startHunk();
+        } else if (current.trailingContext.length) {
+          current.trailingContext = [];
+        }
+        if (entry.type === 'insert') {
+          current!.lines.push({ type: 'add', text: entry.line, after: entry.after });
+        } else {
+          current!.lines.push({ type: 'remove', text: entry.line, before: entry.before });
+        }
+      }
+    }
+
+    if (current && current.lines.length) {
+      finalizeHunk();
+    }
+
+    return hunks;
+  }
+
+  private formatUnifiedDiff(
+    hunks: Array<Array<{ type: 'context' | 'add' | 'remove'; text: string; before?: number; after?: number }>>,
+    filePath?: string
+  ): string {
+    const displayName = filePath ? path.basename(filePath) : 'document';
+    const output: string[] = [`diff -- auto-edit ${displayName}`];
+    for (const hunk of hunks) {
+      const beforeLines = hunk.filter(line => typeof line.before === 'number');
+      const afterLines = hunk.filter(line => typeof line.after === 'number');
+      const beforeStart = beforeLines.length ? beforeLines[0].before || 0 : 0;
+      const afterStart = afterLines.length ? afterLines[0].after || 0 : 0;
+      const beforeCount = beforeLines.length;
+      const afterCount = afterLines.length;
+      output.push(`@@ -${beforeStart},${beforeCount} +${afterStart},${afterCount} @@`);
+      for (const line of hunk) {
+        const prefix = line.type === 'add' ? '+' : line.type === 'remove' ? '-' : ' ';
+        output.push(`${prefix} ${line.text}`);
+      }
+    }
+    return output.join('\n');
   }
 
   private shouldRunViaShell(command: string, args: string[]): boolean {
