@@ -1,0 +1,80 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <defs>
+    <!-- Arka plan için gradient -->
+    <linearGradient id="bgGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#08091A"/>
+      <stop offset="100%" stop-color="#181B3A"/>
+    </linearGradient>
+
+    <!-- İç daire için gradient -->
+    <radialGradient id="innerGlow" cx="30%" cy="30%" r="70%">
+      <stop offset="0%" stop-color="#9F8BFF"/>
+      <stop offset="40%" stop-color="#6F5BFF"/>
+      <stop offset="100%" stop-color="#372B7A"/>
+    </radialGradient>
+
+    <!-- Çizgiler için yumuşak renk -->
+    <linearGradient id="strokeGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#F4ECFF"/>
+      <stop offset="50%" stop-color="#C9B5FF"/>
+      <stop offset="100%" stop-color="#86F2FF"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Arka plan -->
+  <rect x="8" y="8" width="240" height="240" rx="56" fill="url(#bgGradient)"/>
+
+  <!-- Hafif dış parıltı -->
+  <circle cx="112" cy="112" r="86" fill="none" stroke="#6F5BFF" stroke-width="4" opacity="0.35"/>
+
+  <!-- İç parlak daire (LLM çekirdeği gibi) -->
+  <circle cx="112" cy="112" r="70" fill="url(#innerGlow)" opacity="0.95"/>
+
+  <!-- L şeklinde “Lucid / Local LLM” izlenimi -->
+  <path
+    d="M88  sixty
+       L88 148
+       Q88 156 96 156
+       L140 156"
+    stroke="url(#strokeGradient)"
+    stroke-width="10"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    fill="none"
+  />
+
+  <!-- Üç nokta: token / mesaj akışı hissi -->
+  <circle cx="96" cy="176" r="4" fill="#F4ECFF" opacity="0.9"/>
+  <circle cx="112" cy="176" r="4" fill="#E3D6FF" opacity="0.9"/>
+  <circle cx="128" cy="176" r="4" fill="#C9B5FF" opacity="0.9"/>
+
+  <!-- Sağ altta “local compute” çipi -->
+  <g transform="translate(148,148)">
+    <!-- Çip gövdesi -->
+    <rect x="0" y="0" width="60" height="44" rx="10" fill="#111325" stroke="#7A6BFF" stroke-width="2"/>
+    <!-- Çip iç parlaklık -->
+    <rect x="10" y="10" width="40" height="24" rx="6" fill="#1C1F3A"/>
+    <!-- Çip içindeki stilize dalga (model / inference) -->
+    <path
+      d="M14 26
+         C18 20, 22 20, 26 26
+         S34 32, 38 26
+         S46 20, 50 26"
+      stroke="#86F2FF"
+      stroke-width="2.2"
+      stroke-linecap="round"
+      fill="none"
+    />
+    <!-- Çip pinleri -->
+    <circle cx="-4" cy="8" r="2" fill="#9F8BFF"/>
+    <circle cx="-4" cy="22" r="2" fill="#9F8BFF"/>
+    <circle cx="-4" cy="36" r="2" fill="#9F8BFF"/>
+
+    <circle cx="64" cy="8" r="2" fill="#9F8BFF"/>
+    <circle cx="64" cy="22" r="2" fill="#9F8BFF"/>
+    <circle cx="64" cy="36" r="2" fill="#9F8BFF"/>
+  </g>
+
+  <!-- Hafif üst parıltı -->
+  <ellipse cx="112" cy="70" rx="52" ry="20" fill="#FFFFFF" opacity="0.12"/>
+</svg>

@@ -31,16 +31,7 @@
     "AI",
     "Chat"
   ],
-  "activationEvents": [
-    "onView:lucid.chatView",
-    "onCommand:lucid.sendFile",
-    "onCommand:lucid.sendActiveFile",
-    "onCommand:lucid.sendActiveForEdit",
-    "onCommand:lucid.sendFiles",
-    "onCommand:lucid.openChatView",
-    "onCommand:lucid.closeChatView",
-    "onCommand:lucid.dumpState"
-  ],
+  "activationEvents": [],
   "contributes": {
     "chatParticipants": [
       {
@@ -99,22 +90,23 @@
         {
           "id": "lucid.chatView",
           "name": "Lucid Chat",
-          "type": "webview"
+          "type": "webview",
+          "icon": "resources/lucid-icon.svg"
         }
       ]
     },
     "configuration": {
-      "title": "Lucid MCP",
+      "title": "Lucid API",
       "properties": {
         "lucid.ollamaEndpoint": {
           "type": "string",
-          "default": "http://localhost:11434",
-          "description": "URL of the Ollama API"
+          "default": "https://api.example.com/v1/chat/completions",
+          "description": "URL of the Chat API endpoint"
         },
         "lucid.modelName": {
           "type": "string",
-          "default": "llama3",
-          "description": "Name of the model to use in Ollama"
+          "default": "",
+          "description": "Model name (leave empty if server handles model selection)"
         },
         "lucid.enableInlineCompletion": {
           "type": "boolean",
@@ -123,18 +115,18 @@
         },
         "lucid.ollamaExtraHeaders": {
           "type": "object",
-          "default": {},
-          "description": "Optional additional headers to send to Ollama API (also can set OLLAMA_EXTRA_HEADERS env var as JSON)"
+          "default": {"X-Request-Source": "lucid-vscode"},
+          "description": "Optional additional headers to send to API"
         },
         "lucid.ollamaApiKey": {
           "type": "string",
           "default": "",
-          "description": "Optional API key for Ollama. Can also be provided via OLLAMA_API_KEY environment variable"
+          "description": "API key for authentication"
         },
         "lucid.ollamaApiKeyHeaderName": {
           "type": "string",
-          "default": "Authorization",
-          "description": "The header name to use for the Ollama API key"
+          "default": "X-API-Key",
+          "description": "The header name to use for the API key"
         },
         "lucid.logUnmaskedHeaders": {
           "type": "boolean",
